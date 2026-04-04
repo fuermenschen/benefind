@@ -10,8 +10,8 @@ data_dir = "data"
 log_level = "INFO"
 
 [pdf]
-# URL of the source PDF from Kanton Zürich
-source_url = "https://www.zh.ch/content/dam/zhweb/bilder-dokumente/themen/steuern-finanzen/steuern/juristischepersonen/steuerbefreite-institutionen/steuerbefreiung-online/hauptdatei_steuerbefreite_jp_gemeinnuetzig_und_oeffentlich.pdf"
+# URL of the source PDF from Kanton Zürich (current publication)
+source_url = "https://www.zh.ch/content/dam/zhweb/bilder-dokumente/themen/steuern-finanzen/steuern/juristischepersonen/steuerbefreite-institutionen/steuerbefreiung-online/31.12.2025_hauptdatei_steuerbefreite_jp_zh_2026.pdf"
 
 # Local filename for the downloaded PDF
 filename = "steuerbefreite_jp.pdf"
@@ -22,6 +22,15 @@ fuzzy_match_threshold = 85
 
 # If true, also include orgs where location could not be determined
 include_unknown_locations = false
+
+# If true, keep only organizations in category (a)
+use_category_filter = true
+
+# Warn when this many manual location reviews remain after filtering
+manual_review_warning_threshold = 50
+
+# If true, only accept exact location token matches (no fuzzy fallbacks)
+exact_match_only = true
 
 [scraping]
 # Delay between HTTP requests in seconds
@@ -44,7 +53,28 @@ respect_robots_txt = true
 provider = "brave"
 
 # Number of search results to consider
-max_results = 5
+max_results = 10
+
+# If exact quoted query returns fewer than this many results, run a broader unquoted query too
+min_results_before_broad_search = 2
+
+# Max search request rate (Brave API limit: 50 req/s)
+max_requests_per_second = 45.0
+
+# Concurrent workers for website discovery
+max_workers = 20
+
+# Legacy fallback delay between requests in seconds (used only when max_requests_per_second <= 0)
+request_delay_seconds = 0.0
+
+# HTTP timeout in seconds
+timeout_seconds = 15
+
+# Max retries for transient search/API errors (429, 5xx, network)
+max_retries = 3
+
+# Base backoff delay for retries in seconds (exponential backoff)
+retry_backoff_seconds = 1.0
 
 [llm]
 # OpenAI model to use for evaluation

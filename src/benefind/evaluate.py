@@ -143,7 +143,7 @@ def evaluate_batch(
     organizations: list[dict],
     settings: Settings,
     name_column: str = "Bezeichnung",
-    location_column: str = "Sitz",
+    location_column: str = "Sitzort",
     purpose_column: str = "Zweck",
 ) -> list[dict]:
     """Evaluate a batch of organizations.

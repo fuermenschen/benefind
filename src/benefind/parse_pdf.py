@@ -7,6 +7,7 @@ organizations into a structured format (list of dicts / CSV).
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import httpx
@@ -15,6 +16,36 @@ import pdfplumber
 from benefind.config import DATA_DIR, Settings
 
 logger = logging.getLogger(__name__)
+
+NAME_COLUMN = (
+    "Institutionen, die wegen Verfolgung von öffentlichen oder gemeinnützigen Zwecken\n"
+    "steuerbefreit sind"
+)
+
+
+def _sanitize_text(value: str) -> str:
+    """Normalize extracted text to reduce parser artifacts."""
+    if not value:
+        return ""
+
+    text = value
+    # Remove quote-like characters entirely (common PDF artifacts in org names).
+    text = re.sub(r"[\"'`“”„«»‚‘’]", "", text)
+
+    # Collapse whitespace.
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _sanitize_record(record: dict) -> dict:
+    """Sanitize all string values in a parsed record."""
+    cleaned: dict = {}
+    for key, value in record.items():
+        if isinstance(value, str):
+            cleaned[key] = _sanitize_text(value)
+        else:
+            cleaned[key] = value
+    return cleaned
 
 
 def download_pdf(settings: Settings, force: bool = False) -> Path:
@@ -73,8 +104,99 @@ def extract_table(pdf_path: Path) -> list[dict]:
                 record = _row_to_dict(row, headers, page_num)
                 rows.append(record)
 
+    if _looks_like_single_column_layout(rows):
+        logger.info("Detected new one-column PDF layout. Falling back to text-based parser.")
+        rows = _extract_from_text_layout(pdf_path)
+
     logger.info("Extracted %d organization records.", len(rows))
     return rows
+
+
+def _looks_like_single_column_layout(rows: list[dict]) -> bool:
+    if not rows:
+        return False
+    sample = rows[: min(20, len(rows))]
+    return all(len(r.keys()) <= 2 for r in sample)
+
+
+def _extract_from_text_layout(pdf_path: Path) -> list[dict]:
+    """Parse newer PDF layout where table extraction returns only one column."""
+    rows: list[dict] = []
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_num, page in enumerate(pdf.pages, start=1):
+            words = page.extract_words(use_text_flow=True)
+            if not words:
+                continue
+
+            lines: dict[int, list[dict]] = {}
+            for word in words:
+                line_key = int(round(word["top"] * 10))
+                lines.setdefault(line_key, []).append(word)
+
+            pending_name = ""
+            for _, line_words in sorted(lines.items()):
+                line_words_sorted = sorted(line_words, key=lambda w: w["x0"])
+                left_words = [w["text"] for w in line_words_sorted if w["x0"] < 455]
+                location_words = [w["text"] for w in line_words_sorted if 455 <= w["x0"] < 535]
+                category_words = [w["text"] for w in line_words_sorted if w["x0"] >= 535]
+
+                left_text = " ".join(left_words).strip()
+                location_text = " ".join(location_words).strip()
+                category_text = " ".join(category_words).strip()
+
+                left_text = _sanitize_text(left_text)
+                location_text = _sanitize_text(location_text)
+                category_text = _sanitize_text(category_text)
+
+                if _is_header_text_line(left_text, location_text, category_text):
+                    continue
+
+                category = _extract_category(category_text)
+                if category in {"a", "b"}:
+                    full_name = " ".join(part for part in [pending_name, left_text] if part).strip()
+                    if not full_name:
+                        continue
+
+                    rows.append(
+                        _sanitize_record(
+                            {
+                                "_source_page": page_num,
+                                NAME_COLUMN: full_name,
+                                "Sitzort": location_text,
+                                "a/b*": f"( {category} )",
+                            }
+                        )
+                    )
+                    pending_name = ""
+                else:
+                    # Wrapped organization name line (no category marker on this line).
+                    if left_text:
+                        pending_name = " ".join(
+                            part for part in [pending_name, left_text] if part
+                        ).strip()
+
+    return rows
+
+
+def _extract_category(text: str) -> str:
+    match = re.search(r"\b([ab])\b", text.lower())
+    return match.group(1) if match else ""
+
+
+def _is_header_text_line(left: str, location: str, category: str) -> bool:
+    line = " ".join(part for part in [left, location, category] if part).lower()
+    if not line:
+        return True
+    header_markers = [
+        "steuerbefreite jp",
+        "kanton zürich",
+        "institutionen, die wegen verfolgung",
+        "gemeinnützigen",
+        "sitzort",
+        "a / b",
+    ]
+    return any(marker in line for marker in header_markers)
 
 
 def _is_header_row(row: list[str | None]) -> bool:
@@ -98,7 +220,7 @@ def _row_to_dict(
 
     for i, header in enumerate(headers):
         value = row[i].strip() if i < len(row) and row[i] else ""
-        record[header] = value
+        record[header] = _sanitize_text(value)
 
     # Flag rows where most cells are empty (possible parsing artifact)
     non_empty = sum(1 for h in headers if record.get(h))
@@ -108,7 +230,7 @@ def _row_to_dict(
             "May be a multi-line continuation or parsing artifact."
         )
 
-    return record
+    return _sanitize_record(record)
 
 
 def save_parsed(rows: list[dict], output_dir: Path | None = None) -> Path:
@@ -127,7 +249,10 @@ def save_parsed(rows: list[dict], output_dir: Path | None = None) -> Path:
     logger.info("Saved %d rows to %s", len(rows), output_path)
 
     # Also save rows with parse warnings separately
-    warnings_df = df[df.get("_parse_warning", "").notna() & (df.get("_parse_warning", "") != "")]
+    if "_parse_warning" in df.columns:
+        warnings_df = df[df["_parse_warning"].notna() & (df["_parse_warning"] != "")]
+    else:
+        warnings_df = df.iloc[0:0]
     if not warnings_df.empty:
         warnings_path = output_dir / "organizations_parse_warnings.csv"
         warnings_df.to_csv(warnings_path, index=False, encoding="utf-8-sig")

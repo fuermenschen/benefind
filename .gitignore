@@ -33,6 +33,7 @@ data/raw/*.pdf
 data/parsed/*.csv
 data/parsed/*.json
 data/filtered/*.csv
+data/filtered/*.csv.all
 data/filtered/*.json
 data/orgs/*/
 data/reports/*.csv

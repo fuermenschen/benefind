@@ -6,15 +6,9 @@ to the rest of the application. Supports local overrides via settings.local.toml
 
 from __future__ import annotations
 
-import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
-
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -40,6 +34,9 @@ class PdfConfig:
 class FilteringConfig:
     fuzzy_match_threshold: int = 85
     include_unknown_locations: bool = False
+    use_category_filter: bool = True
+    manual_review_warning_threshold: int = 50
+    exact_match_only: bool = True
 
 
 @dataclass
@@ -53,8 +50,15 @@ class ScrapingConfig:
 
 @dataclass
 class SearchConfig:
-    provider: str = "google"
-    max_results: int = 5
+    provider: str = "brave"
+    max_results: int = 10
+    min_results_before_broad_search: int = 3
+    max_requests_per_second: float = 45.0
+    max_workers: int = 20
+    request_delay_seconds: float = 0.0
+    timeout_seconds: int = 15
+    max_retries: int = 3
+    retry_backoff_seconds: float = 1.0
 
 
 @dataclass
@@ -78,6 +82,7 @@ class MunicipalityConfig:
     name: str = "Bezirk Winterthur"
     municipalities: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
+    excluded_municipalities: list[str] = field(default_factory=list)
 
 
 @dataclass
