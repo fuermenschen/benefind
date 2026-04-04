@@ -40,8 +40,8 @@ user_agent = "benefind/0.1 (nonprofit research; https://hfm-winti.ch)"
 respect_robots_txt = true
 
 [search]
-# Search provider: "google", "brave", or "serpapi"
-provider = "google"
+# Search provider: "brave"
+provider = "brave"
 
 # Number of search results to consider
 max_results = 5

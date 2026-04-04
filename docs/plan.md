@@ -109,17 +109,16 @@ These steps are self-contained and require no API keys.
 #### Step 2.1: Search API Integration
 - **File**: `src/benefind/discover_websites.py`
 - **What**: For each matched org, find its official website
-- **Status**: Stub only (returns "not_implemented")
+- **Status**: Implemented (Brave Search API)
 - **Implementation notes**:
-  - Primary approach: use a search API (Google Custom Search, Brave Search, or SerpAPI)
+  - Uses the Brave Search API (`BRAVE_API_KEY` in `.env`)
   - Search query: `"{org_name}" {org_location}` (quoted name for exact match)
-  - Alternative: use OpenAI model with web search tool (`gpt-4o` with browsing)
-  - Heuristics to pick the best result:
-    - Prefer .ch domains
-    - Prefer results that contain the org name in the domain
-    - Deprioritize aggregator sites (zefix.ch, moneyhouse.ch, etc.)
+  - Scoring heuristics to pick the best result:
+    - Prefer .ch domains (+10)
+    - Prefer results that contain the org name in the domain (+15 per word)
+    - Deprioritize aggregator sites like zefix.ch, moneyhouse.ch, etc. (-50)
   - Rate limiting between requests
-  - Save results with confidence level (high/medium/low/none)
+  - Results saved with confidence level (high/medium/low/none)
   - Orgs with no website found are flagged for manual review
 
 #### Step 2.2: Manual Website Entry
