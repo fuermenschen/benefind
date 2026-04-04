@@ -1,0 +1,25 @@
+# Project structure
+
+```text
+benefind/
+├── config/                  # Configuration files
+├── data/                    # All intermediate and output data (gitignored)
+│   ├── raw/                 # Downloaded PDF
+│   ├── parsed/              # Extracted CSV
+│   ├── filtered/            # Location-filtered results
+│   ├── orgs/                # Per-org scraped content & evaluations
+│   └── reports/             # Final summary reports
+├── docs/                    # Project docs
+├── scripts/
+│   ├── run_pipeline.py      # Full pipeline orchestrator
+│   └── review_flagged.py    # Manual review helper
+└── src/benefind/            # Source code
+    ├── cli.py               # CLI entry point
+    ├── config.py            # Configuration loading
+    ├── parse_pdf.py         # PDF parsing
+    ├── filter_locations.py  # Location filtering
+    ├── discover_websites.py # Website discovery
+    ├── scrape.py            # Web scraping
+    ├── evaluate.py          # LLM evaluation
+    └── report.py            # Report generation
+```

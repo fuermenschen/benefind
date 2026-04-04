@@ -1,9 +1,18 @@
 # benefind
 
+[![Status: Work in Progress](https://img.shields.io/badge/status-work%20in%20progress-orange)](#current-status)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue)](#documentation)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-green)](#license)
+
 AI-assisted screening of tax-exempt nonprofit organizations for charity partnership matching.
+
+> [!WARNING]
+> **Work in progress:** benefind is currently under active development. Data formats, scoring logic, CLI commands, and report outputs may change as we iterate.
 
 Built by [Verein für Menschen](https://hfm-winti.ch/verein) to find beneficiary partners for
 [Höhenmeter für Menschen](https://hfm-winti.ch), a charity run in Winterthur.
+
+This is a purpose-built internal project for a specific use case, not a generic framework.
 
 ## What it does
 
@@ -18,85 +27,34 @@ benefind takes the official Canton Zurich list of tax-exempt nonprofit organizat
 
 Wherever uncertainty arises, items are flagged for manual review rather than silently decided.
 
-## Setup
+## Why this project matters
 
-```bash
-# Clone
-git clone https://github.com/fuermenschen/benefind.git
-cd benefind
+Finding suitable charity partners manually is time-consuming. benefind helps the team:
 
-# Install dependencies
-uv sync
+- reduce repetitive screening work
+- keep decisions transparent and reviewable
+- focus human attention on ambiguous cases
+- move from raw public data to an actionable shortlist
 
-# Set up API keys
-cp .env.example .env
-# Edit .env and add your OpenAI API key
-```
+The goal is practical decision support for this event's context, not broad reusability.
 
-## Usage
+## Documentation
 
-Run individual steps:
+- [Local development](docs/local-development.md)
+- [Pipeline usage](docs/pipeline-usage.md)
+- [Configuration](docs/configuration.md)
+- [Project structure](docs/project-structure.md)
+- [Project plan](docs/plan.md)
 
-```bash
-uv run benefind parse       # Step 1: Download & parse PDF
-uv run benefind filter      # Step 2: Filter to Bezirk Winterthur
-uv run benefind discover    # Step 3a: Find org websites
-uv run benefind scrape      # Step 3b: Scrape websites
-uv run benefind evaluate    # Step 3c: LLM evaluation
-uv run benefind report      # Step 4: Generate report
-```
+## Current status
 
-Or run the full pipeline with confirmation prompts between steps:
+This repository is in an exploratory phase.
 
-```bash
-uv run python scripts/run_pipeline.py
-```
-
-Review flagged items interactively:
-
-```bash
-uv run python scripts/review_flagged.py locations   # uncertain location matches
-uv run python scripts/review_flagged.py websites    # orgs without websites
-```
-
-## Configuration
-
-All configuration lives in `config/`:
-
-- `settings.toml` - general settings (thresholds, delays, model choice)
-- `municipalities.toml` - list of municipalities in Bezirk Winterthur
-- `prompts.toml` - LLM prompt templates for organization evaluation
-
-Create `config/settings.local.toml` for local overrides (gitignored).
-
-## Project Structure
-
-```
-benefind/
-├── config/                  # Configuration files
-├── data/                    # All intermediate and output data (gitignored)
-│   ├── raw/                 # Downloaded PDF
-│   ├── parsed/              # Extracted CSV
-│   ├── filtered/            # Location-filtered results
-│   ├── orgs/                # Per-org scraped content & evaluations
-│   └── reports/             # Final summary reports
-├── docs/
-│   └── plan.md              # Detailed project plan & implementation steps
-├── scripts/
-│   ├── run_pipeline.py      # Full pipeline orchestrator
-│   └── review_flagged.py    # Manual review helper
-└── src/benefind/            # Source code
-    ├── cli.py               # CLI entry point
-    ├── config.py            # Configuration loading
-    ├── parse_pdf.py         # PDF parsing
-    ├── filter_locations.py  # Location filtering
-    ├── discover_websites.py # Website discovery
-    ├── scrape.py            # Web scraping
-    ├── evaluate.py          # LLM evaluation
-    └── report.py            # Report generation
-```
-
-See [docs/plan.md](docs/plan.md) for the full project plan and implementation details.
+- some heuristics are intentionally conservative
+- manual review is a first-class step, not an exception
+- prompts and thresholds are still being tuned with real-world examples
+- docs and developer ergonomics are actively being improved
+- implementation choices are optimized for this project, even when they are not universally reusable
 
 ## License
 
