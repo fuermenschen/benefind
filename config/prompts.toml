@@ -1,0 +1,125 @@
+# Prompt templates for LLM-based organization evaluation
+# -------------------------------------------------------
+# Use {placeholders} for dynamic values. Available placeholders:
+#   {org_name}    - Name of the organization
+#   {org_location} - Location/municipality of the organization
+#   {org_purpose}  - Stated purpose from the tax-exempt registry
+#   {page_content} - Scraped website content (markdown)
+#
+# Each prompt has:
+#   - id: unique identifier for referencing in results
+#   - question: the prompt template sent to the LLM
+#   - answer_type: "text", "yes_no", "number", "category"
+#   - description: human-readable explanation of what this question assesses
+
+[[prompts]]
+id = "target_group"
+description = "Identifies the primary target group the organization serves"
+answer_type = "text"
+question = """
+Based on the following information about the organization "{org_name}" located in {org_location}:
+
+Stated purpose: {org_purpose}
+
+Website content:
+{page_content}
+
+Question: What is the primary target group this organization serves? (e.g., children,
+elderly, people with disabilities, people in poverty, refugees, etc.)
+
+Answer concisely in 1-2 sentences. If you cannot determine this, say "UNKNOWN".
+"""
+
+[[prompts]]
+id = "serves_people"
+description = "Checks if the organization primarily serves people (vs. animals, environment, culture, etc.)"
+answer_type = "yes_no"
+question = """
+Based on the following information about the organization "{org_name}" located in {org_location}:
+
+Stated purpose: {org_purpose}
+
+Website content:
+{page_content}
+
+Question: Does this organization primarily serve people directly (as opposed to focusing
+on animals, environment, arts/culture, sports, or other non-human causes)?
+
+Answer with YES, NO, or UNCLEAR. Then explain briefly in one sentence.
+"""
+
+[[prompts]]
+id = "local_activity"
+description = "Checks if the organization is active in Winterthur / region"
+answer_type = "yes_no"
+question = """
+Based on the following information about the organization "{org_name}" located in {org_location}:
+
+Stated purpose: {org_purpose}
+
+Website content:
+{page_content}
+
+Question: Is this organization active specifically in Winterthur or the surrounding region
+(Bezirk Winterthur)? Or does it operate primarily elsewhere (nationally/internationally)
+with just a registered address in the region?
+
+Answer with LOCAL, REGIONAL, NATIONAL, INTERNATIONAL, or UNCLEAR. Then explain briefly.
+"""
+
+[[prompts]]
+id = "accepts_donations"
+description = "Checks if the organization accepts donations from other organizations"
+answer_type = "yes_no"
+question = """
+Based on the following information about the organization "{org_name}" located in {org_location}:
+
+Stated purpose: {org_purpose}
+
+Website content:
+{page_content}
+
+Question: Does this organization accept donations? Is there any indication that they
+accept donations from other organizations or associations (not just individuals)?
+
+Answer with YES, NO, or UNCLEAR. Then explain briefly.
+"""
+
+[[prompts]]
+id = "size_and_budget"
+description = "Estimates the size and annual budget of the organization"
+answer_type = "text"
+question = """
+Based on the following information about the organization "{org_name}" located in {org_location}:
+
+Stated purpose: {org_purpose}
+
+Website content:
+{page_content}
+
+Question: What can you determine about the size of this organization? Consider:
+- Number of employees or volunteers
+- Annual budget or revenue
+- Scale of operations
+
+Provide whatever information is available. If nothing can be determined, say "UNKNOWN".
+Answer concisely.
+"""
+
+[[prompts]]
+id = "summary"
+description = "Generates a brief overall summary suitable for human review"
+answer_type = "text"
+question = """
+Based on the following information about the organization "{org_name}" located in {org_location}:
+
+Stated purpose: {org_purpose}
+
+Website content:
+{page_content}
+
+Please provide a brief summary (3-5 sentences) of what this organization does, who it
+serves, and whether it might be a suitable beneficiary partner for a local charity run
+in Winterthur that raises money for organizations supporting people in difficult life
+situations (e.g., people with disabilities, mental health challenges, poverty, etc.).
+"""

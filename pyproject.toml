@@ -1,0 +1,55 @@
+[project]
+name = "benefind"
+version = "0.1.0"
+description = "AI-assisted screening of tax-exempt nonprofits for charity partnership matching"
+license = "GPL-3.0-only"
+requires-python = ">=3.12"
+dependencies = [
+    # PDF parsing
+    "pdfplumber>=0.11",
+    # HTTP
+    "httpx>=0.27",
+    # HTML to markdown
+    "markdownify>=0.14",
+    # Fuzzy string matching
+    "thefuzz>=0.22",
+    # OpenAI API
+    "openai>=1.40",
+    # Config
+    "tomli>=2.0; python_version < '3.11'",
+    "tomli-w>=1.0",
+    # CLI
+    "typer>=0.12",
+    "rich>=13.0",
+    # Data handling
+    "pandas>=2.2",
+    # robots.txt parsing
+    "robotexclusionrulesparser>=1.7",
+    # HTML parsing
+    "beautifulsoup4>=4.12",
+    # Environment variables
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+benefind = "benefind.cli:app"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/benefind"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

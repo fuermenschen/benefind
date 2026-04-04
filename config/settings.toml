@@ -1,0 +1,60 @@
+# benefind configuration
+# ---------------------
+# Copy this file to settings.local.toml for local overrides (gitignored).
+
+[general]
+# Project data directory (relative to project root)
+data_dir = "data"
+
+# Log level: DEBUG, INFO, WARNING, ERROR
+log_level = "INFO"
+
+[pdf]
+# URL of the source PDF from Kanton Zürich
+source_url = "https://www.zh.ch/content/dam/zhweb/bilder-dokumente/themen/steuern-finanzen/steuern/juristischepersonen/steuerbefreite-institutionen/steuerbefreiung-online/hauptdatei_steuerbefreite_jp_gemeinnuetzig_und_oeffentlich.pdf"
+
+# Local filename for the downloaded PDF
+filename = "steuerbefreite_jp.pdf"
+
+[filtering]
+# Fuzzy match threshold (0-100). Below this, flag for manual review.
+fuzzy_match_threshold = 85
+
+# If true, also include orgs where location could not be determined
+include_unknown_locations = false
+
+[scraping]
+# Delay between HTTP requests in seconds
+request_delay_seconds = 2.0
+
+# Maximum number of pages to scrape per organization
+max_pages_per_org = 10
+
+# HTTP timeout in seconds
+timeout_seconds = 30
+
+# User-Agent string for HTTP requests
+user_agent = "benefind/0.1 (nonprofit research; https://hfm-winti.ch)"
+
+# Respect robots.txt
+respect_robots_txt = true
+
+[search]
+# Search provider: "google", "brave", or "serpapi"
+provider = "google"
+
+# Number of search results to consider
+max_results = 5
+
+[llm]
+# OpenAI model to use for evaluation
+model = "gpt-4o-mini"
+
+# Temperature for LLM calls (lower = more deterministic)
+temperature = 0.1
+
+# Maximum tokens per response
+max_tokens = 1000
+
+# Confidence threshold (0.0-1.0). Below this, flag for manual review.
+confidence_threshold = 0.7

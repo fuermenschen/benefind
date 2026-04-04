@@ -1,0 +1,44 @@
+# Municipalities in Bezirk Winterthur
+# Source: https://de.wikipedia.org/wiki/Bezirk_Winterthur
+#
+# These are the municipalities used to filter organizations by location.
+# Add or remove entries as needed. The matching is fuzzy, so minor spelling
+# variations (e.g. "Winterthur" vs "WINTERTHUR") are handled automatically.
+
+[bezirk_winterthur]
+name = "Bezirk Winterthur"
+
+municipalities = [
+    "Winterthur",
+    "Brütten",
+    "Dättlikon",
+    "Dinhard",
+    "Elgg",
+    "Ellikon an der Thur",
+    "Hagenbuch",
+    "Hettlingen",
+    "Neftenbach",
+    "Pfungen",
+    "Rickenbach",
+    "Schlatt",
+    "Seuzach",
+    "Turbenthal",
+    "Wiesendangen",
+    "Zell",
+]
+
+# Additional location terms that should also match (e.g. sub-localities,
+# historical names, or common abbreviations)
+aliases = [
+    "Winti",
+    "Oberwinterthur",
+    "Seen",
+    "Töss",
+    "Veltheim",
+    "Wülflingen",
+    "Mattenbach",
+    "Hegi",
+    "Gotzenwil",
+    "Räterschen",      # part of Elsau/Turbenthal area
+    "Rikon",           # part of Zell
+]

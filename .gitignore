@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# uv
+uv.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.local
+
+# Data (keep structure, ignore contents)
+data/raw/*.pdf
+data/parsed/*.csv
+data/parsed/*.json
+data/filtered/*.csv
+data/filtered/*.json
+data/orgs/*/
+data/reports/*.csv
+data/reports/*.xlsx
+data/reports/*.json
+
+# But keep .gitkeep files
+!data/**/.gitkeep
