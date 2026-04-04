@@ -6,7 +6,7 @@ benefind/
 ├── data/                    # All intermediate and output data (gitignored)
 │   ├── raw/                 # Downloaded PDF
 │   ├── parsed/              # Extracted CSV
-│   ├── filtered/            # Location-filtered results
+│   ├── filtered/            # Location-filtered results + website decisions
 │   ├── orgs/                # Per-org scraped content & evaluations
 │   └── reports/             # Final summary reports
 ├── docs/                    # Project docs
@@ -21,5 +21,13 @@ benefind/
     ├── discover_websites.py # Website discovery
     ├── scrape.py            # Web scraping
     ├── evaluate.py          # LLM evaluation
+    ├── review.py            # Interactive manual review flows
     └── report.py            # Report generation
 ```
+
+Common generated files in `data/filtered/`:
+
+- `organizations_matched.csv`
+- `organizations_matched.csv.all` (full matched set parked by `benefind subset` safe mode)
+- `organizations_with_websites.csv`
+- `location_review_decisions.csv`

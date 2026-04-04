@@ -19,6 +19,8 @@ criteria.
   decided by automation.
 - **Configurability**: Municipality lists, fuzzy match thresholds, LLM prompts,
   and scraping parameters are all managed via TOML config files.
+- **Guided UX**: High-friction steps use an interactive CLI wizard flow with
+  explicit confirmations, warnings, and immediate manual resolution paths.
 - **Respectful scraping**: The tool checks robots.txt, rate-limits requests, and
   uses a transparent User-Agent string.
 - **Incremental execution**: Each pipeline step can be run independently. Results
@@ -71,11 +73,12 @@ These steps are self-contained and require no API keys.
 #### Step 1.2: Table Extraction from PDF
 - **File**: `src/benefind/parse_pdf.py`
 - **What**: Use `pdfplumber` to extract the tabular data from the PDF
-- **Status**: Scaffolded, needs real-world testing
+- **Status**: Implemented with layout fallback
 - **Implementation notes**:
   - The PDF is a multi-page table with repeated headers on each page
-  - Need to determine the actual column names from the PDF (Bezeichnung, Sitz,
-    Zweck, etc.) - these will become clear on first successful parse
+  - Newer publication layout (2026 list) no longer exposes full columns through
+    `extract_table`; parser falls back to text-coordinate extraction
+  - Legacy table extraction path is still kept for older layouts
   - Multi-line cells are common in government PDFs and need special handling
     (merging continuation rows)
   - Rows that can't be parsed cleanly get a `_parse_warning` flag
@@ -85,24 +88,26 @@ These steps are self-contained and require no API keys.
 #### Step 1.3: Location Filtering
 - **File**: `src/benefind/filter_locations.py`
 - **What**: Filter organizations to those located in Bezirk Winterthur
-- **Status**: Scaffolded
+- **Status**: Implemented
 - **Implementation notes**:
-  - Municipality list in `config/municipalities.toml` (16 municipalities + aliases)
+  - Municipality config includes both target and explicitly excluded municipalities
+    for stronger fuzzy matching quality
   - Fuzzy matching with `thefuzz` (ratio, partial_ratio, token_sort_ratio)
   - Exact substring match as fast path (e.g., "8400 Winterthur" contains "Winterthur")
   - Three output buckets: matched, needs_review, excluded
   - Configurable threshold (default 85%) with a "review zone" 15 points below
+  - Optional category filter keeps only `(a)` entries
   - Output: three CSV files in `data/filtered/`
 
 #### Step 1.4: Manual Review Helper
-- **File**: `scripts/review_flagged.py`
-- **What**: Interactive CLI for reviewing uncertain location matches
-- **Status**: Scaffolded
+- **File**: `src/benefind/review.py`, `src/benefind/cli.py`
+- **What**: Questionary-based wizard for reviewing uncertain location matches
+- **Status**: Implemented
 - **Implementation notes**:
-  - Shows each uncertain match with its confidence score
-  - User can accept (y), reject (n), skip (s), or quit (q)
-  - Accepted orgs are appended to the matched CSV
-  - Remaining items stay in the review CSV
+  - `benefind filter` asks before overwriting outputs and can launch review directly
+  - Warns when review queue exceeds configurable threshold (default 50)
+  - `benefind review locations` supports include/exclude/skip/quit decisions
+  - Decisions are persisted to matched/excluded/review CSV files
 
 ### Phase 2: Website Discovery (Step 3a)
 
@@ -112,19 +117,26 @@ These steps are self-contained and require no API keys.
 - **Status**: Implemented (Brave Search API)
 - **Implementation notes**:
   - Uses the Brave Search API (`BRAVE_API_KEY` in `.env`)
-  - Search query: `"{org_name}" {org_location}` (quoted name for exact match)
+  - Search query strategy: unquoted first (`{org_name} {org_location}`), quoted fallback when needed
   - Scoring heuristics to pick the best result:
     - Prefer .ch domains (+10)
     - Prefer results that contain the org name in the domain (+15 per word)
     - Deprioritize aggregator sites like zefix.ch, moneyhouse.ch, etc. (-50)
-  - Rate limiting between requests
+  - Domain-level grouping combines multiple pages from same site and picks a canonical URL
+  - Parallel workers with global rate limiting, retry/backoff, and API-friendly throttling
+  - Checkpointed persistence after each organization for safe resume
   - Results saved with confidence level (high/medium/low/none)
   - Orgs with no website found are flagged for manual review
 
 #### Step 2.2: Manual Website Entry
-- **File**: `scripts/review_flagged.py` (websites subcommand)
-- **What**: Let users manually enter website URLs for orgs where search failed
-- **Status**: Scaffolded
+- **File**: `src/benefind/review.py`, `src/benefind/cli.py`
+- **What**: Wizard to review uncertain website decisions (accept/override/none)
+- **Status**: Implemented
+- **Implementation notes**:
+  - `benefind review websites` supports accepting proposed URLs, entering manual URLs,
+    marking no website, skipping, or quitting
+  - Website decisions persist immediately after each input
+  - `_website_origin` tracks provenance (`automatic`, `manual`, `manual_none`)
 
 ### Phase 3: Web Scraping (Step 3b)
 
@@ -228,7 +240,7 @@ These steps are self-contained and require no API keys.
 | HTML parsing | `beautifulsoup4` | Navigate and clean HTML |
 | Fuzzy matching | `thefuzz` | Location name matching |
 | LLM | `openai` | AI-powered evaluation |
-| CLI | `typer` + `rich` | User-friendly command line interface |
+| CLI | `typer` + `rich` + `questionary` | User-friendly command line interface and wizard prompts |
 | Data handling | `pandas` | CSV I/O and data manipulation |
 | robots.txt | `robotexclusionrulesparser` | Respectful scraping |
 | Config | TOML (stdlib/tomli) | Human-readable configuration |

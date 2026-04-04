@@ -4,6 +4,7 @@
 
 - Python 3.12+
 - `uv`
+- Brave Search API key (for website discovery)
 - OpenAI API key
 
 ## Setup
@@ -18,7 +19,9 @@ uv sync
 
 # Set up API keys
 cp .env.example .env
-# Edit .env and add your OpenAI API key
+# Edit .env and add:
+# - BRAVE_API_KEY (discover)
+# - OPENAI_API_KEY (evaluate)
 ```
 
 ## Notes
