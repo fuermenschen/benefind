@@ -10,6 +10,11 @@ import questionary
 from rich.console import Console
 
 from benefind.config import DATA_DIR
+from benefind.exclusion_reasons import (
+    EXCLUDE_REASON_OPTIONS,
+    ExcludeReason,
+    has_exclusion_reason,
+)
 
 console = Console()
 LOCATION_DECISIONS_PATH = DATA_DIR / "filtered" / "location_review_decisions.csv"
@@ -52,6 +57,12 @@ def _is_true(value: object) -> bool:
         return value
     text = str(value).strip().lower()
     return text in {"1", "true", "yes", "y"}
+
+
+def _text_or_empty(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    return str(value or "").strip()
 
 
 def _decision_key(name: str, location: str) -> str:
@@ -209,17 +220,17 @@ def review_websites() -> None:
         "_website_source",
         "_website_needs_review",
         "_website_origin",
-        "_excluded_from_pipeline",
         "_excluded_reason",
+        "_excluded_reason_note",
         "_excluded_at",
     ]
     for column in required_columns:
         if column not in df.columns:
             df[column] = ""
-    for column in ["_excluded_from_pipeline", "_excluded_reason", "_excluded_at"]:
-        df[column] = df[column].astype("object")
+    for column in ["_excluded_reason", "_excluded_reason_note", "_excluded_at"]:
+        df[column] = df[column].fillna("").astype("object")
 
-    excluded_mask = df["_excluded_from_pipeline"].apply(_is_true)
+    excluded_mask = df["_excluded_reason"].apply(has_exclusion_reason)
     no_website_mask = df["_website_url"].isna() | (df["_website_url"].astype(str).str.strip() == "")
     needs_review_mask = df["_website_needs_review"].apply(_is_true)
     review_mask = (no_website_mask | needs_review_mask) & ~excluded_mask
@@ -240,7 +251,6 @@ def review_websites() -> None:
     accepted = 0
     accepted_llm = 0
     manually_set = 0
-    marked_none = 0
     excluded_from_pipeline = 0
 
     for position, idx in enumerate(queue_indices, start=1):
@@ -293,8 +303,8 @@ def review_websites() -> None:
                 continue
             df.at[idx, "_website_needs_review"] = False
             df.at[idx, "_website_origin"] = "automatic"
-            df.at[idx, "_excluded_from_pipeline"] = "false"
             df.at[idx, "_excluded_reason"] = ""
+            df.at[idx, "_excluded_reason_note"] = ""
             df.at[idx, "_excluded_at"] = ""
             accepted += 1
             _save_csv_atomic(df, input_path)
@@ -310,8 +320,8 @@ def review_websites() -> None:
             df.at[idx, "_website_source"] = "manual: accepted llm alternative"
             df.at[idx, "_website_needs_review"] = False
             df.at[idx, "_website_origin"] = "manual_llm"
-            df.at[idx, "_excluded_from_pipeline"] = "false"
             df.at[idx, "_excluded_reason"] = ""
+            df.at[idx, "_excluded_reason_note"] = ""
             df.at[idx, "_excluded_at"] = ""
             accepted_llm += 1
             _save_csv_atomic(df, input_path)
@@ -329,8 +339,8 @@ def review_websites() -> None:
             df.at[idx, "_website_source"] = "manual: user input"
             df.at[idx, "_website_needs_review"] = False
             df.at[idx, "_website_origin"] = "manual"
-            df.at[idx, "_excluded_from_pipeline"] = "false"
             df.at[idx, "_excluded_reason"] = ""
+            df.at[idx, "_excluded_reason_note"] = ""
             df.at[idx, "_excluded_at"] = ""
             manually_set += 1
             _save_csv_atomic(df, input_path)
@@ -338,33 +348,64 @@ def review_websites() -> None:
             continue
 
         if decision == "No website exists":
-            df.at[idx, "_website_url"] = ""
-            df.at[idx, "_website_confidence"] = "none"
-            df.at[idx, "_website_source"] = "manual: none"
-            df.at[idx, "_website_needs_review"] = False
-            df.at[idx, "_website_origin"] = "manual_none"
-            df.at[idx, "_excluded_from_pipeline"] = "false"
-            df.at[idx, "_excluded_reason"] = ""
-            df.at[idx, "_excluded_at"] = ""
-            marked_none += 1
-            _save_csv_atomic(df, input_path)
-            console.print("  [green]-> Marked as no website[/green]\n")
-            continue
-
-        if decision == "Exclude from pipeline":
-            reason = questionary.text("Reason for excluding this organization", qmark="?").ask()
-            reason = (reason or "").strip()
-            if not reason:
-                console.print("  [yellow]-> Reason required. Skipped.[/yellow]\n")
-                continue
             timestamp = datetime.now(UTC).isoformat(timespec="seconds")
             df.at[idx, "_website_url"] = ""
             df.at[idx, "_website_confidence"] = "excluded"
-            df.at[idx, "_website_source"] = f"manual: excluded ({reason})"
+            df.at[idx, "_website_source"] = (
+                f"manual: excluded ({ExcludeReason.NO_INFORMATION.value})"
+            )
             df.at[idx, "_website_needs_review"] = False
             df.at[idx, "_website_origin"] = "manual_excluded"
-            df.at[idx, "_excluded_from_pipeline"] = "true"
-            df.at[idx, "_excluded_reason"] = reason
+            df.at[idx, "_excluded_reason"] = ExcludeReason.NO_INFORMATION.value
+            df.at[idx, "_excluded_reason_note"] = ""
+            df.at[idx, "_excluded_at"] = timestamp
+            excluded_from_pipeline += 1
+            _save_csv_atomic(df, input_path)
+            console.print("  [green]-> Excluded (no website/no information found)[/green]\n")
+            continue
+
+        if decision == "Exclude from pipeline":
+            choices = [option.label for option in EXCLUDE_REASON_OPTIONS]
+            selected_reason_label = questionary.select(
+                "Exclude reason",
+                choices=choices,
+                qmark="?",
+            ).ask()
+            if selected_reason_label is None:
+                console.print("  [yellow]-> No reason selected. Skipped.[/yellow]\n")
+                continue
+
+            selected_reason = next(
+                (
+                    option.reason
+                    for option in EXCLUDE_REASON_OPTIONS
+                    if option.label == selected_reason_label
+                ),
+                None,
+            )
+            if selected_reason is None:
+                console.print("  [yellow]-> Invalid reason selection. Skipped.[/yellow]\n")
+                continue
+
+            reason_note = ""
+            if selected_reason == ExcludeReason.OTHER:
+                reason_note = (
+                    questionary.text("Other reason (required)", qmark="?").ask() or ""
+                ).strip()
+                if not reason_note:
+                    console.print(
+                        "  [yellow]-> Reason note required for OTHER. Skipped.[/yellow]\n"
+                    )
+                    continue
+
+            timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+            df.at[idx, "_website_url"] = ""
+            df.at[idx, "_website_confidence"] = "excluded"
+            df.at[idx, "_website_source"] = f"manual: excluded ({selected_reason.value})"
+            df.at[idx, "_website_needs_review"] = False
+            df.at[idx, "_website_origin"] = "manual_excluded"
+            df.at[idx, "_excluded_reason"] = selected_reason.value
+            df.at[idx, "_excluded_reason_note"] = reason_note
             df.at[idx, "_excluded_at"] = timestamp
             excluded_from_pipeline += 1
             _save_csv_atomic(df, input_path)
@@ -373,14 +414,13 @@ def review_websites() -> None:
     remaining_mask = (
         df["_website_url"].isna() | (df["_website_url"].astype(str).str.strip() == "")
     ) | (df["_website_needs_review"].apply(_is_true))
-    remaining_mask = remaining_mask & ~df["_excluded_from_pipeline"].apply(_is_true)
+    remaining_mask = remaining_mask & ~df["_excluded_reason"].apply(has_exclusion_reason)
     remaining = int(remaining_mask.sum())
 
     console.print("[bold]Website review update[/bold]")
     console.print(f"  Accepted proposed: {accepted}")
     console.print(f"  Accepted LLM alternative: {accepted_llm}")
     console.print(f"  Entered manually: {manually_set}")
-    console.print(f"  Marked no website: {marked_none}")
     console.print(f"  Excluded from pipeline: {excluded_from_pipeline}")
     console.print(f"  Remaining in queue: {remaining}")
     console.print(f"  File: {input_path}")

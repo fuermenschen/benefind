@@ -13,6 +13,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pandas as pd
 import questionary
 import typer
 from dotenv import load_dotenv
@@ -20,6 +21,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 from benefind.config import PROJECT_ROOT, load_settings
+from benefind.exclusion_reasons import has_exclusion_reason_series
 
 # Load .env file from project root before anything else
 load_dotenv(PROJECT_ROOT / ".env")
@@ -303,13 +305,7 @@ def discover(
         return series.isna() | (series.astype(str).str.strip() == "")
 
     def remaining_review_count(df: pd.DataFrame) -> int:
-        excluded_mask = (
-            df["_excluded_from_pipeline"]
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .isin({"true", "1", "yes"})
-        )
+        excluded_mask = has_exclusion_reason_series(df["_excluded_reason"])
         needs_review_mask = (
             df["_website_needs_review"]
             .astype(str)
@@ -356,8 +352,8 @@ def discover(
         "_website_llm_agrees",
         "_website_decision_stage",
         "_discovered_at",
-        "_excluded_from_pipeline",
         "_excluded_reason",
+        "_excluded_reason_note",
         "_excluded_at",
     ]
 
@@ -405,13 +401,7 @@ def discover(
             base_df[col] = base_df[col].where(~is_blank(base_df[col]), base_df[existing_col])
             base_df = base_df.drop(columns=[existing_col])
 
-    excluded_mask = (
-        base_df["_excluded_from_pipeline"]
-        .astype(str)
-        .str.strip()
-        .str.lower()
-        .isin({"true", "1", "yes"})
-    )
+    excluded_mask = has_exclusion_reason_series(base_df["_excluded_reason"])
     pending_mask = is_blank(base_df["_website_confidence"]) & ~excluded_mask
     pending_df = base_df[pending_mask]
 
@@ -703,11 +693,9 @@ def scrape(
             "Input CSV has no _website_url column. Run discover first to create it."
         )
 
-    if "_excluded_from_pipeline" not in df.columns:
-        df["_excluded_from_pipeline"] = False
-    excluded_mask = (
-        df["_excluded_from_pipeline"].astype(str).str.strip().str.lower().isin({"true", "1", "yes"})
-    )
+    if "_excluded_reason" not in df.columns:
+        df["_excluded_reason"] = ""
+    excluded_mask = has_exclusion_reason_series(df["_excluded_reason"])
 
     name_column = _detect_first_column(
         list(df.columns),
@@ -781,11 +769,9 @@ def evaluate(
         console.print("[yellow]No organizations found in input file. Nothing to evaluate.[/yellow]")
         return
 
-    if "_excluded_from_pipeline" not in df.columns:
-        df["_excluded_from_pipeline"] = False
-    excluded_mask = (
-        df["_excluded_from_pipeline"].astype(str).str.strip().str.lower().isin({"true", "1", "yes"})
-    )
+    if "_excluded_reason" not in df.columns:
+        df["_excluded_reason"] = ""
+    excluded_mask = has_exclusion_reason_series(df["_excluded_reason"])
     active_df = df[~excluded_mask].copy()
     if active_df.empty:
         console.print(

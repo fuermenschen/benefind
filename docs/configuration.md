@@ -73,5 +73,4 @@ Website provenance values:
 - `_website_origin=automatic` (auto-discovered or accepted proposed URL)
 - `_website_origin=manual_llm` (user accepted LLM-proposed alternative URL)
 - `_website_origin=manual` (user-entered URL)
-- `_website_origin=manual_none` (explicitly marked as no website)
-- `_website_origin=manual_excluded` (excluded from downstream pipeline with reason)
+- `_website_origin=manual_excluded` (excluded from downstream pipeline with reason; includes "no website exists" quick-access)
