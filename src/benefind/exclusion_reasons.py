@@ -27,23 +27,23 @@ class ExcludeReasonOption:
 EXCLUDE_REASON_OPTIONS: tuple[ExcludeReasonOption, ...] = (
     ExcludeReasonOption(
         reason=ExcludeReason.NO_INFORMATION,
-        label="No first-party information found on the web (NO_INFORMATION)",
+        label="No information available online",
     ),
     ExcludeReasonOption(
         reason=ExcludeReason.IN_LIQUIDATION,
-        label="Organization is in liquidation (IN_LIQUIDATION)",
+        label="In liquidation",
     ),
     ExcludeReasonOption(
         reason=ExcludeReason.NOT_EXIST,
-        label="Organization does not exist anymore (NOT_EXIST)",
+        label="Does not exist anymore",
     ),
     ExcludeReasonOption(
         reason=ExcludeReason.IRRELEVANT_PURPOSE,
-        label="Organization has irrelevant purpose/target group (IRRELEVANT_PURPOSE)",
+        label="Irrelevant purpose / target group",
     ),
     ExcludeReasonOption(
         reason=ExcludeReason.OTHER,
-        label="Other (free text) (OTHER)",
+        label="Other (free text required)",
     ),
 )
 

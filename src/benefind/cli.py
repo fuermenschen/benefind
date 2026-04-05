@@ -14,12 +14,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
-import questionary
 import typer
 from dotenv import load_dotenv
-from rich.console import Console
 from rich.logging import RichHandler
 
+from benefind.cli_ui import (
+    confirm,
+    console,
+    make_panel,
+    print_error,
+    print_summary,
+    print_warning,
+)
 from benefind.config import PROJECT_ROOT, load_settings
 from benefind.exclusion_reasons import has_exclusion_reason_series
 
@@ -32,7 +38,6 @@ app = typer.Typer(
     no_args_is_help=True,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
-console = Console()
 
 LONG_NAME_COLUMN_ASCII = (
     "Institutionen, die wegen Verfolgung von öffentlichen oder gemeinnuetzigen Zwecken\n"
@@ -123,7 +128,7 @@ def parse(
     pdf_path = download_pdf(settings, force=force_download)
     rows = extract_table(pdf_path)
     output = save_parsed(rows)
-    console.print(f"\n[green]Parsed {len(rows)} organizations -> {output}[/green]")
+    print_summary("Parse Results", [("Parsed", len(rows)), ("Saved to", str(output))])
 
 
 @app.command(name="filter")
@@ -164,12 +169,15 @@ def filter_cmd(
     existing_outputs = [path for path in output_paths.values() if path.exists()]
     if existing_outputs:
         if interactive:
-            overwrite = questionary.confirm(
-                "Filtered output files already exist. Overwrite them?",
-                default=True,
-                qmark="?",
-            ).ask()
-            if not overwrite:
+            names = "\n".join(f"  • {p.name}" for p in existing_outputs)
+            console.print(
+                make_panel(
+                    f"[bold yellow]The following files already exist:[/bold yellow]\n{names}",
+                    "Warning",
+                    border_style="yellow",
+                )
+            )
+            if not confirm("Overwrite existing filtered files?", default=True):
                 console.print("[yellow]Filter cancelled. Existing files were kept.[/yellow]")
                 return
         else:
@@ -178,26 +186,24 @@ def filter_cmd(
     matched, review, excluded = filter_organizations(input_path, settings, location_column)
     paths = save_filtered(matched, review, excluded)
 
-    console.print(f"\n[green]Matched: {len(matched)} organizations[/green]")
-    console.print(f"[yellow]Need review: {len(review)} organizations[/yellow]")
-    console.print(f"[dim]Excluded: {len(excluded)} organizations[/dim]")
-    for name, path in paths.items():
-        console.print(f"  {name}: {path}")
+    print_summary(
+        "Filter Results",
+        [
+            ("Matched", f"[bold green]{len(matched)}[/bold green] organizations"),
+            ("Need review", f"[bold yellow]{len(review)}[/bold yellow] organizations"),
+            ("Excluded", f"[dim]{len(excluded)}[/dim] organizations"),
+            *[(name, str(path)) for name, path in paths.items()],
+        ],
+    )
 
     if len(review) > settings.filtering.manual_review_warning_threshold:
-        console.print(
-            "[bold yellow]Warning:[/bold yellow]"
-            f" {len(review)} organizations need manual review "
-            f"(threshold: {settings.filtering.manual_review_warning_threshold})."
+        print_warning(
+            f"{len(review)} organizations need manual review"
+            f" (threshold: {settings.filtering.manual_review_warning_threshold})."
         )
 
     if interactive and len(review) > 0:
-        start_review = questionary.confirm(
-            "Start manual location review now?",
-            default=True,
-            qmark="?",
-        ).ask()
-        if start_review:
+        if confirm("Start manual location review now?", default=True):
             review_stats = review_locations()
             if review_stats["remaining"] == 0:
                 console.print(
@@ -282,12 +288,11 @@ def discover(
         if settings.search.firecrawl_enabled and os.environ.get("FIRECRAWL_API_KEY", ""):
             paid_services.append("Firecrawl")
         services_label = ", ".join(paid_services)
-        proceed = questionary.confirm(
-            (f"Warning: discover may use paid services ({services_label}). Proceed?"),
-            default=False,
-            qmark="?",
-        ).ask()
-        if not proceed:
+        paid_line = (
+            "[bold yellow]This operation uses paid services:[/bold yellow]\n  " + services_label
+        )
+        console.print(make_panel(paid_line, "Cost Warning", border_style="yellow"))
+        if not confirm("Proceed with website discovery?", default=False):
             console.print("[yellow]Discover cancelled.[/yellow]")
             return
 
@@ -363,16 +368,15 @@ def discover(
 
     if output_path.exists() and refresh:
         if interactive:
-            prompt = (
-                "A discovered-websites file already exists. "
-                "Recompute all and overwrite discovery columns?"
+            console.print(
+                make_panel(
+                    "A discovered-websites file already exists.\n"
+                    "All discovery columns will be recomputed and overwritten.",
+                    "Warning",
+                    border_style="yellow",
+                )
             )
-            overwrite = questionary.confirm(
-                prompt,
-                default=False,
-                qmark="?",
-            ).ask()
-            if not overwrite:
+            if not confirm("Recompute all and overwrite discovery columns?", default=False):
                 console.print("[yellow]Discover cancelled. Existing results were kept.[/yellow]")
                 return
         else:
@@ -535,12 +539,10 @@ def discover(
         console.print(f"[green]Websites present: {found_total}/{len(base_df)}[/green]")
         remaining_review = remaining_review_count(base_df)
         if interactive and remaining_review > 0:
-            launch_review = questionary.confirm(
+            if confirm(
                 f"{remaining_review} organizations still need website review. Start review now?",
                 default=True,
-                qmark="?",
-            ).ask()
-            if launch_review:
+            ):
                 from benefind.review import review_websites
 
                 review_websites()
@@ -628,34 +630,36 @@ def discover(
     except ExternalApiAccessError as e:
         save_checkpoint()
         show_progress(force=True)
-        console.print(
-            "[yellow]Discover stopped early due to external API access issue. "
-            "Progress has been checkpointed.[/yellow]"
+        print_warning(
+            "Discover stopped early due to external API access issue. "
+            "Progress has been checkpointed."
         )
-        console.print(f"[red]{e.provider}:[/red] {e.reason}")
+        print_error(f"{e.provider}: {e.reason}")
         raise typer.Exit(code=1)
     except KeyboardInterrupt:
         show_progress(force=True)
-        console.print("[yellow]Discover stopped early. Progress has been checkpointed.[/yellow]")
+        print_warning("Discover stopped early. Progress has been checkpointed.")
         return
 
     show_progress(force=True)
 
     found_batch = progress["found"]
     found_total = int((~is_blank(base_df["_website_url"])).sum())
-    message = f"\n[green]Discovered websites for {found_batch}/{len(results)} pending organizations"
-    console.print(f"{message}[/green]")
-    console.print(f"[green]Websites present overall: {found_total}/{len(base_df)}[/green]")
-    console.print(f"Saved: {output_path}")
+    print_summary(
+        "Discovery Results",
+        [
+            ("Discovered now", f"{found_batch}/{len(results)} pending organizations"),
+            ("Websites present", f"{found_total}/{len(base_df)}"),
+            ("Saved to", str(output_path)),
+        ],
+    )
 
     remaining_review = remaining_review_count(base_df)
     if interactive and remaining_review > 0:
-        launch_review = questionary.confirm(
+        if confirm(
             f"{remaining_review} organizations still need website review. Start review now?",
             default=True,
-            qmark="?",
-        ).ask()
-        if launch_review:
+        ):
             from benefind.review import review_websites
 
             review_websites()
@@ -683,7 +687,7 @@ def scrape(
 
     input_path = input_file or (DATA_DIR / "filtered" / "organizations_with_websites.csv")
     if not input_path.exists():
-        console.print(f"[red]Input file not found:[/red] {input_path}")
+        print_error(f"Input file not found: {input_path}")
         console.print("Run [bold]benefind discover[/bold] first or pass [bold]--input[/bold].")
         raise typer.Exit(code=1)
 
@@ -730,18 +734,22 @@ def scrape(
             skipped_existing += 1
             continue
 
-        console.print(f"[{i}/{len(orgs_with_url)}] {name}")
+        console.print(f"[dim][{i}/{len(orgs_with_url)}][/dim] {name}")
         org_dir = scrape_organization(name, url, settings)
         if org_dir:
             success += 1
         else:
             failed += 1
 
-    console.print("\n[bold]Scrape results[/bold]")
-    console.print(f"  Scraped now: {success}")
-    console.print(f"  Failed now: {failed}")
-    console.print(f"  Skipped existing: {skipped_existing}")
-    console.print(f"  Excluded from pipeline: {int(excluded_mask.sum())}")
+    print_summary(
+        "Scrape Results",
+        [
+            ("Scraped now", success),
+            ("Failed now", failed),
+            ("Skipped existing", skipped_existing),
+            ("Excluded from pipeline", int(excluded_mask.sum())),
+        ],
+    )
 
 
 @app.command()
@@ -760,7 +768,7 @@ def evaluate(
 
     input_path = input_file or (DATA_DIR / "filtered" / "organizations_with_websites.csv")
     if not input_path.exists():
-        console.print(f"[red]Input file not found:[/red] {input_path}")
+        print_error(f"Input file not found: {input_path}")
         console.print("Run [bold]benefind discover[/bold] first or pass [bold]--input[/bold].")
         raise typer.Exit(code=1)
 
@@ -807,17 +815,22 @@ def evaluate(
             purpose_column=purpose_column,
         )
     except ExternalApiAccessError as e:
-        console.print(
-            "[yellow]Evaluate stopped early due to external API access issue. "
-            "Completed and partial evaluation files are kept.[/yellow]"
+        print_warning(
+            "Evaluate stopped early due to external API access issue. "
+            "Completed and partial evaluation files are kept."
         )
-        console.print(f"[red]{e.provider}:[/red] {e.reason}")
+        print_error(f"{e.provider}: {e.reason}")
         raise typer.Exit(code=1)
 
     errors = sum(1 for r in results if r.get("_error"))
-    console.print(f"\n[green]Evaluated {len(results)} organizations[/green]")
-    console.print(f"[yellow]Errors: {errors}[/yellow]")
-    console.print(f"[dim]Excluded from pipeline: {int(excluded_mask.sum())}[/dim]")
+    print_summary(
+        "Evaluate Results",
+        [
+            ("Evaluated", len(results)),
+            ("Errors", errors),
+            ("Excluded from pipeline", int(excluded_mask.sum())),
+        ],
+    )
 
 
 @app.command()
@@ -830,8 +843,7 @@ def report() -> None:
 
     paths = generate_report(settings)
     if paths:
-        for name, path in paths.items():
-            console.print(f"[green]{name}: {path}[/green]")
+        print_summary("Report Generated", [(name, str(path)) for name, path in paths.items()])
     else:
         console.print("[yellow]No evaluations found. Run the pipeline first.[/yellow]")
 
@@ -885,9 +897,9 @@ def subset(
         elif default_active_path.exists():
             default_active_path.replace(default_full_path)
             input_path = default_full_path
-            console.print(f"[yellow]Moved full dataset to {default_full_path}[/yellow]")
+            print_warning(f"Moved full dataset to {default_full_path}")
         else:
-            console.print(f"[red]Input file not found:[/red] {default_active_path}")
+            print_error(f"Input file not found: {default_active_path}")
             raise typer.Exit(code=1)
         output_path = default_active_path
     else:
@@ -895,7 +907,7 @@ def subset(
         output_path = output_file or (DATA_DIR / "filtered" / "organizations_matched_subset.csv")
 
     if not input_path.exists():
-        console.print(f"[red]Input file not found:[/red] {input_path}")
+        print_error(f"Input file not found: {input_path}")
         raise typer.Exit(code=1)
 
     df = pd.read_csv(input_path, encoding="utf-8-sig")
@@ -914,13 +926,15 @@ def subset(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     subset_df.to_csv(output_path, index=False, encoding="utf-8-sig")
 
-    console.print(f"[green]Created subset with {count}/{len(df)} rows ({mode}).[/green]")
-    console.print(f"Saved: {output_path}")
-    if safe_mode:
-        console.print(
-            "[dim]Default discover now uses the subset; full data is kept in "
-            f"{default_full_path}[/dim]"
-        )
+    note = f"[dim]Full data parked at {default_full_path}[/dim]" if safe_mode else ""
+    print_summary(
+        "Subset Created",
+        [
+            ("Rows", f"{count}/{len(df)} ({mode})"),
+            ("Saved to", str(output_path)),
+            *([("Note", note)] if note else []),
+        ],
+    )
 
 
 @app.command()
@@ -971,23 +985,21 @@ def extend(
 
     if safe_mode and not default_full_path.exists():
         if default_subset_path.exists():
-            console.print(
-                f"[red]Safe extend needs the parked full dataset:[/red] {default_full_path}"
-            )
+            print_error(f"Safe extend needs the parked full dataset: {default_full_path}")
             console.print(
                 "Run [bold]benefind subset[/bold] once first to initialize subset safe mode."
             )
             raise typer.Exit(code=1)
 
-        console.print(f"[red]Input file not found:[/red] {default_full_path}")
+        print_error(f"Input file not found: {default_full_path}")
         console.print("Run [bold]benefind filter[/bold] then [bold]benefind subset[/bold] first.")
         raise typer.Exit(code=1)
 
     if not input_path.exists():
-        console.print(f"[red]Input file not found:[/red] {input_path}")
+        print_error(f"Input file not found: {input_path}")
         raise typer.Exit(code=1)
     if not output_path.exists():
-        console.print(f"[red]Subset file not found:[/red] {output_path}")
+        print_error(f"Subset file not found: {output_path}")
         console.print("Create an initial subset first with [bold]benefind subset[/bold].")
         raise typer.Exit(code=1)
 
@@ -1014,9 +1026,7 @@ def extend(
     subset_df = subset_df.drop_duplicates(subset="_org_id", keep="first")
     deduped = before_subset - len(subset_df)
     if deduped > 0:
-        console.print(
-            f"[yellow]Removed {deduped} duplicate _org_id rows from the existing subset.[/yellow]"
-        )
+        print_warning(f"Removed {deduped} duplicate _org_id rows from the existing subset.")
 
     full_ids = set(full_df["_org_id"].astype(str).str.strip())
     subset_ids = set(subset_df["_org_id"].astype(str).str.strip())
@@ -1028,34 +1038,31 @@ def extend(
     full_size = len(full_ids)
 
     if stale_ids:
-        console.print(
-            "[yellow]"
+        print_warning(
             f"Subset contains {len(stale_ids)} _org_id values not present in source; "
             "they are kept unchanged."
-            "[/yellow]"
         )
 
     if current_coverage >= full_size:
-        console.print("[green]Subset already covers the full source dataset.[/green]")
-        console.print(f"Coverage: {current_coverage}/{full_size} source rows")
-        if stale_ids:
-            console.print(f"[dim]Additional stale rows kept: {len(stale_ids)}[/dim]")
+        print_summary(
+            "Extend Results",
+            [
+                ("Status", "Subset already covers the full source dataset"),
+                ("Coverage", f"{current_coverage}/{full_size} source rows"),
+                *([("Stale rows kept", str(len(stale_ids)))] if stale_ids else []),
+            ],
+        )
         return
 
     target_size = size if size is not None else current_coverage * 2
     if target_size <= current_coverage:
-        console.print(
-            "[yellow]"
+        print_warning(
             f"Target size ({target_size}) is not larger than current coverage ({current_coverage})."
-            "[/yellow]"
         )
         return
     if target_size > full_size:
-        console.print(
-            "[yellow]"
-            f"Requested size {target_size} exceeds source size {full_size}; "
-            f"capping to {full_size}."
-            "[/yellow]"
+        print_warning(
+            f"Requested size {target_size} exceeds source size {full_size}; capping to {full_size}."
         )
         target_size = full_size
 
@@ -1079,12 +1086,13 @@ def extend(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     extended_df.to_csv(output_path, index=False, encoding="utf-8-sig")
 
-    console.print(
-        "[green]Extended subset "
-        f"{current_size} -> {len(extended_df)} rows "
-        f"(added {len(additions_df)}, {mode}).[/green]"
+    print_summary(
+        "Extend Results",
+        [
+            ("Rows", f"{current_size} → {len(extended_df)} (added {len(additions_df)}, {mode})"),
+            ("Saved to", str(output_path)),
+        ],
     )
-    console.print(f"Saved: {output_path}")
 
 
 @app.command(name="delete")
@@ -1139,12 +1147,15 @@ def delete_cmd(
 
     if not yes and sys.stdin.isatty() and sys.stdout.isatty():
         target_label = ", ".join(sorted(targets))
-        confirmed = questionary.confirm(
-            f"Delete data targets: {target_label}?",
-            default=False,
-            qmark="?",
-        ).ask()
-        if not confirmed:
+        console.print(
+            make_panel(
+                f"[bold yellow]Targets:[/bold yellow] {target_label}\n\n"
+                "[bold red]This will permanently delete all matching data files.[/bold red]",
+                "Delete Confirmation",
+                border_style="red",
+            )
+        )
+        if not confirm("Delete these data targets?", default=False):
             console.print("[yellow]Delete cancelled.[/yellow]")
             return
 
@@ -1180,9 +1191,10 @@ def delete_cmd(
         removed_files += files
         removed_dirs += dirs
 
-    console.print("[green]Delete complete.[/green]")
-    console.print(f"Removed files: {removed_files}")
-    console.print(f"Removed directories: {removed_dirs}")
+    print_summary(
+        "Delete Complete",
+        [("Files removed", removed_files), ("Directories removed", removed_dirs)],
+    )
 
 
 @app.command()
@@ -1210,18 +1222,19 @@ def run() -> None:
     settings = load_settings()
     _setup_logging(settings.log_level)
 
-    console.print("[bold]benefind pipeline[/bold]")
-    console.print("=" * 40)
-
-    # TODO: Wire up the full pipeline once all steps are implemented
-    console.print("[yellow]Full pipeline orchestration is under development.[/yellow]")
-    console.print("For now, run each step individually:")
-    console.print("  benefind parse")
-    console.print("  benefind filter")
-    console.print("  benefind discover")
-    console.print("  benefind scrape")
-    console.print("  benefind evaluate")
-    console.print("  benefind report")
+    console.print(
+        make_panel(
+            "[yellow]Full pipeline orchestration is under development.[/yellow]\n\n"
+            "Run each step individually:\n"
+            "  [cyan]benefind parse[/cyan]\n"
+            "  [cyan]benefind filter[/cyan]\n"
+            "  [cyan]benefind discover[/cyan]\n"
+            "  [cyan]benefind scrape[/cyan]\n"
+            "  [cyan]benefind evaluate[/cyan]\n"
+            "  [cyan]benefind report[/cyan]",
+            "benefind pipeline",
+        )
+    )
 
 
 if __name__ == "__main__":
