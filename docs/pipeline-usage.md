@@ -63,6 +63,7 @@ uv run benefind filter --no-wizard
 
 - persists `data/filtered/organizations_with_websites.csv`
 - checkpoints after each processed organization (safe resume on interruption)
+- fails fast on unrecoverable external API access issues (quota exhausted, missing key, invalid/forbidden key) and keeps checkpointed progress
 - processes pending rows only by default; use `--refresh` to recompute all
 - supports early stop with `--stop-after N`
 - supports score-based fallback query strategy and optional LLM verification
@@ -102,6 +103,10 @@ Website review wizard actions:
 - skip or quit
 
 Every website decision is persisted immediately.
+
+`benefind evaluate` also fails fast on unrecoverable OpenAI access issues
+(quota exhausted, missing key, invalid/forbidden key). Completed and partial
+`evaluation.json` files are kept so you can resume after fixing credentials/quota.
 
 ## Data cleanup
 

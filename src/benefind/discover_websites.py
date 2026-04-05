@@ -21,6 +21,11 @@ from urllib.parse import urlparse
 import httpx
 
 from benefind.config import Settings
+from benefind.external_api import (
+    ExternalApiAccessError,
+    classify_http_access_error,
+    classify_openai_access_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -460,12 +465,23 @@ def _llm_web_verify(
     org_location: str,
     candidate_url: str,
     settings: Settings,
+    stop_event: threading.Event | None = None,
 ) -> tuple[str | None, str, str, str]:
     """Ask an LLM web search tool for the official URL."""
     try:
         from openai import OpenAI
     except Exception as e:
         return None, f"llm_unavailable: {e}", "", ""
+
+    openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not openai_api_key:
+        raise ExternalApiAccessError(
+            provider="OpenAI",
+            reason="missing_api_key",
+            details="OPENAI_API_KEY is not set",
+        )
+    if stop_event is not None and stop_event.is_set():
+        return None, "llm_skipped: batch_stopped", "", ""
 
     prompt = (
         "Find the official website for this Swiss nonprofit organization. "
@@ -485,6 +501,9 @@ def _llm_web_verify(
             temperature=0,
         )
     except Exception as e:
+        access_error = classify_openai_access_error(e)
+        if access_error is not None:
+            raise access_error
         logger.warning("LLM verification failed for '%s': %s", org_name, e)
         return None, f"llm_error: {e}", prompt, ""
 
@@ -507,6 +526,7 @@ def _search_with_fallback(
     query_location: str,
     settings: Settings,
     rate_limiter: _SearchRateLimiter | None = None,
+    stop_event: threading.Event | None = None,
 ) -> tuple[list[dict], str, int]:
     """Run unquoted search first; trigger quoted fallback based on score quality."""
     primary_query = f"{query_name} {query_location}".strip()
@@ -523,6 +543,7 @@ def _search_with_fallback(
         max_retries=settings.search.max_retries,
         retry_backoff_seconds=settings.search.retry_backoff_seconds,
         rate_limiter=rate_limiter,
+        stop_event=stop_event,
     )
     request_count += 1
 
@@ -560,6 +581,7 @@ def _search_with_fallback(
             max_retries=settings.search.max_retries,
             retry_backoff_seconds=settings.search.retry_backoff_seconds,
             rate_limiter=rate_limiter,
+            stop_event=stop_event,
         )
         request_count += 1
         results = _merge_unique_results(results, quoted_results, settings.search.max_results)
@@ -576,6 +598,7 @@ def _brave_search(
     max_retries: int = 3,
     retry_backoff_seconds: float = 1.0,
     rate_limiter: _SearchRateLimiter | None = None,
+    stop_event: threading.Event | None = None,
 ) -> list[dict]:
     """Execute a search query using the Brave Search API.
 
@@ -583,9 +606,13 @@ def _brave_search(
     """
     api_key = os.environ.get("BRAVE_API_KEY", "")
     if not api_key:
-        raise ValueError(
-            "BRAVE_API_KEY not set. Add it to your .env file. "
-            "Get a key at: https://brave.com/search/api/"
+        raise ExternalApiAccessError(
+            provider="Brave",
+            reason="missing_api_key",
+            details=(
+                "BRAVE_API_KEY not set. Add it to your .env file. "
+                "Get a key at: https://brave.com/search/api/"
+            ),
         )
 
     headers = {
@@ -604,6 +631,8 @@ def _brave_search(
     with httpx.Client(timeout=timeout) as client:
         for attempt in range(max_retries + 1):
             try:
+                if stop_event is not None and stop_event.is_set():
+                    return []
                 if rate_limiter is not None:
                     rate_limiter.wait_for_slot()
                 response = client.get(
@@ -611,6 +640,16 @@ def _brave_search(
                     headers=headers,
                     params=params,
                 )
+
+                body_text = response.text
+                access_error = classify_http_access_error(
+                    provider="Brave",
+                    status_code=response.status_code,
+                    body_text=body_text,
+                    headers=dict(response.headers),
+                )
+                if access_error is not None:
+                    raise access_error
 
                 if response.status_code in retryable_status_codes and attempt < max_retries:
                     retry_after = response.headers.get("Retry-After")
@@ -627,7 +666,10 @@ def _brave_search(
                         attempt + 1,
                         max_retries,
                     )
-                    time.sleep(sleep_seconds)
+                    if stop_event is not None and stop_event.wait(sleep_seconds):
+                        return []
+                    if stop_event is None:
+                        time.sleep(sleep_seconds)
                     continue
 
                 response.raise_for_status()
@@ -645,7 +687,10 @@ def _brave_search(
                     attempt + 1,
                     max_retries,
                 )
-                time.sleep(sleep_seconds)
+                if stop_event is not None and stop_event.wait(sleep_seconds):
+                    return []
+                if stop_event is None:
+                    time.sleep(sleep_seconds)
         else:
             data = {}
 
@@ -669,6 +714,7 @@ def _firecrawl_search(
     max_retries: int = 2,
     retry_backoff_seconds: float = 1.0,
     rate_limiter: _SearchRateLimiter | None = None,
+    stop_event: threading.Event | None = None,
 ) -> list[dict]:
     """Execute a search query using the Firecrawl Search API.
 
@@ -695,6 +741,8 @@ def _firecrawl_search(
     with httpx.Client(timeout=timeout) as client:
         for attempt in range(max_retries + 1):
             try:
+                if stop_event is not None and stop_event.is_set():
+                    return []
                 if rate_limiter is not None:
                     rate_limiter.wait_for_slot()
                 response = client.post(
@@ -702,6 +750,16 @@ def _firecrawl_search(
                     headers=headers,
                     json=payload,
                 )
+
+                body_text = response.text
+                access_error = classify_http_access_error(
+                    provider="Firecrawl",
+                    status_code=response.status_code,
+                    body_text=body_text,
+                    headers=dict(response.headers),
+                )
+                if access_error is not None:
+                    raise access_error
 
                 if response.status_code in retryable_status_codes and attempt < max_retries:
                     retry_after = response.headers.get("Retry-After")
@@ -718,7 +776,10 @@ def _firecrawl_search(
                         attempt + 1,
                         max_retries,
                     )
-                    time.sleep(sleep_seconds)
+                    if stop_event is not None and stop_event.wait(sleep_seconds):
+                        return []
+                    if stop_event is None:
+                        time.sleep(sleep_seconds)
                     continue
 
                 response.raise_for_status()
@@ -739,7 +800,10 @@ def _firecrawl_search(
                     attempt + 1,
                     max_retries,
                 )
-                time.sleep(sleep_seconds)
+                if stop_event is not None and stop_event.wait(sleep_seconds):
+                    return []
+                if stop_event is None:
+                    time.sleep(sleep_seconds)
         else:
             return []
 
@@ -780,6 +844,7 @@ def _run_discovery_cascade(
     settings: Settings,
     rate_limiter: _SearchRateLimiter | None = None,
     llm_verify_enabled: bool | None = None,
+    stop_event: threading.Event | None = None,
 ) -> _DiscoveryTrace:
     query_name = _sanitize_search_text(org_name)
     query_location = _sanitize_search_text(org_location)
@@ -792,6 +857,7 @@ def _run_discovery_cascade(
         query_location,
         settings,
         rate_limiter=rate_limiter,
+        stop_event=stop_event,
     )
 
     brave_rank = _rank_results(results, org_name)
@@ -876,6 +942,7 @@ def _run_discovery_cascade(
             org_location,
             candidate_url,
             settings,
+            stop_event=stop_event,
         )
         if llm_url:
             fetched_title = _fetch_page_title(llm_url, timeout=settings.search.timeout_seconds)
@@ -940,8 +1007,11 @@ def _run_discovery_cascade(
                     timeout=settings.search.firecrawl_timeout_seconds,
                     max_retries=settings.search.firecrawl_max_retries,
                     rate_limiter=rate_limiter,
+                    stop_event=stop_event,
                 )
                 request_count += 1
+            except ExternalApiAccessError:
+                raise
             except Exception as e:
                 logger.warning("Firecrawl search failed for '%s': %s", org_name, e)
                 fc_results = []
@@ -1033,6 +1103,7 @@ def find_website(
     settings: Settings,
     rate_limiter: _SearchRateLimiter | None = None,
     llm_verify_enabled: bool | None = None,
+    stop_event: threading.Event | None = None,
 ) -> WebsiteResult:
     """Find the website for a given organization via cascade search."""
     try:
@@ -1042,18 +1113,11 @@ def find_website(
             settings,
             rate_limiter=rate_limiter,
             llm_verify_enabled=llm_verify_enabled,
+            stop_event=stop_event,
         )
         return trace.result
-    except ValueError as e:
-        logger.error("Search config error: %s", e)
-        return WebsiteResult(
-            org_name=org_name,
-            url=None,
-            confidence="none",
-            source="error: missing API key",
-            needs_review=True,
-            decision_stage="search_error",
-        )
+    except ExternalApiAccessError:
+        raise
     except Exception as e:
         logger.warning("Search failed for '%s': %s", org_name, e)
         return WebsiteResult(
@@ -1136,8 +1200,18 @@ def find_websites_batch(
     rate_limiter = _SearchRateLimiter(requests_per_second)
     max_workers = max(1, settings.search.max_workers)
     indexed_results: list[tuple[int, WebsiteResult]] = []
+    stop_event = threading.Event()
 
     def run_single(index: int, org: dict) -> tuple[int, WebsiteResult]:
+        if stop_event.is_set():
+            return index, WebsiteResult(
+                org_name=str(org.get(name_column, "") or ""),
+                url=None,
+                confidence="none",
+                source="skipped: batch stopped",
+                needs_review=True,
+                decision_stage="batch_stopped",
+            )
         name = org.get(name_column, "")
         location = org.get(location_column, "")
         result = find_website(
@@ -1146,18 +1220,25 @@ def find_websites_batch(
             settings,
             rate_limiter=rate_limiter,
             llm_verify_enabled=llm_verify_enabled,
+            stop_event=stop_event,
         )
         return index, result
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(run_single, index, org) for index, org in enumerate(organizations)
-        ]
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    futures = [executor.submit(run_single, index, org) for index, org in enumerate(organizations)]
+    try:
         for future in as_completed(futures):
-            index, result = future.result()
+            try:
+                index, result = future.result()
+            except ExternalApiAccessError:
+                stop_event.set()
+                executor.shutdown(wait=True, cancel_futures=True)
+                raise
             indexed_results.append((index, result))
             if on_result is not None:
                 on_result(index, result)
+    finally:
+        executor.shutdown(wait=True)
 
     indexed_results.sort(key=lambda item: item[0])
     return [result for _, result in indexed_results]

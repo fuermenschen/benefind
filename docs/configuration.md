@@ -48,6 +48,13 @@ Discovery query strategy:
 - discovery decision cascade is Brave -> LLM web search -> Firecrawl fallback
 - URLs from LLM are only considered when the target URL is reachable (quick title fetch)
 
+External API failure policy:
+
+- fail fast on unrecoverable access errors: quota exhausted, missing API key, invalid/forbidden key
+- keep retry behavior for transient rate limits and network/server hiccups
+- `discover` checkpoints after each processed row, so intermediate progress is preserved
+- `evaluate` persists completed and partial `evaluation.json` outputs before stopping
+
 Municipality matching lives in `config/municipalities.toml`:
 
 - `municipalities`: allowed municipalities (kept)

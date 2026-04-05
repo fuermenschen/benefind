@@ -265,6 +265,7 @@ def discover(
         find_websites_batch,
         inspect_website_candidates,
     )
+    from benefind.external_api import ExternalApiAccessError
 
     settings = load_settings()
     _setup_logging(settings.log_level)
@@ -633,6 +634,15 @@ def discover(
             llm_verify_enabled=llm_verify_enabled,
             on_result=on_result,
         )
+    except ExternalApiAccessError as e:
+        save_checkpoint()
+        show_progress(force=True)
+        console.print(
+            "[yellow]Discover stopped early due to external API access issue. "
+            "Progress has been checkpointed.[/yellow]"
+        )
+        console.print(f"[red]{e.provider}:[/red] {e.reason}")
+        raise typer.Exit(code=1)
     except KeyboardInterrupt:
         show_progress(force=True)
         console.print("[yellow]Discover stopped early. Progress has been checkpointed.[/yellow]")
@@ -754,6 +764,7 @@ def evaluate(
 
     from benefind.config import DATA_DIR
     from benefind.evaluate import evaluate_batch
+    from benefind.external_api import ExternalApiAccessError
 
     settings = load_settings()
     _setup_logging(settings.log_level)
@@ -800,13 +811,21 @@ def evaluate(
         raise typer.BadParameter("Could not detect organization name column in input CSV.")
 
     console.print(f"Evaluating {len(active_df)} organizations...")
-    results = evaluate_batch(
-        active_df.to_dict("records"),
-        settings,
-        name_column=name_column,
-        location_column=location_column,
-        purpose_column=purpose_column,
-    )
+    try:
+        results = evaluate_batch(
+            active_df.to_dict("records"),
+            settings,
+            name_column=name_column,
+            location_column=location_column,
+            purpose_column=purpose_column,
+        )
+    except ExternalApiAccessError as e:
+        console.print(
+            "[yellow]Evaluate stopped early due to external API access issue. "
+            "Completed and partial evaluation files are kept.[/yellow]"
+        )
+        console.print(f"[red]{e.provider}:[/red] {e.reason}")
+        raise typer.Exit(code=1)
 
     errors = sum(1 for r in results if r.get("_error"))
     console.print(f"\n[green]Evaluated {len(results)} organizations[/green]")

@@ -8,13 +8,21 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from openai import OpenAI
 
 from benefind.config import DATA_DIR, PromptTemplate, Settings
+from benefind.external_api import ExternalApiAccessError, classify_openai_access_error
 
 logger = logging.getLogger(__name__)
+
+
+def _save_evaluation(org_dir: Path, results: dict) -> Path:
+    eval_path = org_dir / "evaluation.json"
+    eval_path.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+    return eval_path
 
 
 def load_scraped_content(org_dir: Path, max_chars: int = 30_000) -> str:
@@ -65,23 +73,29 @@ def ask_llm(
     if client is None:
         client = OpenAI()
 
-    response = client.chat.completions.create(
-        model=settings.llm.model,
-        temperature=settings.llm.temperature,
-        max_tokens=settings.llm.max_tokens,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a research assistant helping a Swiss nonprofit organization "
-                    "evaluate potential charity partners. Be factual and concise. "
-                    "If you are unsure about something, say so clearly. "
-                    "Answer in the language of the question."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-    )
+    try:
+        response = client.chat.completions.create(
+            model=settings.llm.model,
+            temperature=settings.llm.temperature,
+            max_tokens=settings.llm.max_tokens,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a research assistant helping a Swiss nonprofit organization "
+                        "evaluate potential charity partners. Be factual and concise. "
+                        "If you are unsure about something, say so clearly. "
+                        "Answer in the language of the question."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+        )
+    except Exception as e:
+        access_error = classify_openai_access_error(e)
+        if access_error is not None:
+            raise access_error
+        raise
 
     return response.choices[0].message.content or ""
 
@@ -122,6 +136,10 @@ def evaluate_organization(
                 "description": template.description,
             }
             logger.info("[%s] %s -> answered", org_name, template.id)
+        except ExternalApiAccessError:
+            eval_path = _save_evaluation(org_dir, results)
+            logger.warning("Saved partial evaluation for %s to %s", org_name, eval_path)
+            raise
         except Exception as e:
             logger.error("[%s] %s -> error: %s", org_name, template.id, e)
             results[template.id] = {
@@ -132,8 +150,7 @@ def evaluate_organization(
             }
 
     # Save results
-    eval_path = org_dir / "evaluation.json"
-    eval_path.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+    eval_path = _save_evaluation(org_dir, results)
     logger.info("Saved evaluation for %s to %s", org_name, eval_path)
 
     return results
@@ -152,6 +169,14 @@ def evaluate_batch(
     already created by the scraper.
     """
     from benefind.scrape import _slugify
+
+    openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not openai_api_key:
+        raise ExternalApiAccessError(
+            provider="OpenAI",
+            reason="missing_api_key",
+            details="OPENAI_API_KEY is not set",
+        )
 
     client = OpenAI()
     results = []
