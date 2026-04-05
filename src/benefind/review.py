@@ -209,14 +209,20 @@ def review_websites() -> None:
         "_website_source",
         "_website_needs_review",
         "_website_origin",
+        "_excluded_from_pipeline",
+        "_excluded_reason",
+        "_excluded_at",
     ]
     for column in required_columns:
         if column not in df.columns:
             df[column] = ""
+    for column in ["_excluded_from_pipeline", "_excluded_reason", "_excluded_at"]:
+        df[column] = df[column].astype("object")
 
+    excluded_mask = df["_excluded_from_pipeline"].apply(_is_true)
     no_website_mask = df["_website_url"].isna() | (df["_website_url"].astype(str).str.strip() == "")
     needs_review_mask = df["_website_needs_review"].apply(_is_true)
-    review_mask = no_website_mask | needs_review_mask
+    review_mask = (no_website_mask | needs_review_mask) & ~excluded_mask
     queue_indices = list(df[review_mask].index)
 
     if not queue_indices:
@@ -232,8 +238,10 @@ def review_websites() -> None:
     console.print(f"\n[bold]{len(queue_indices)} organizations need website review.[/bold]\n")
 
     accepted = 0
+    accepted_llm = 0
     manually_set = 0
     marked_none = 0
+    excluded_from_pipeline = 0
 
     for position, idx in enumerate(queue_indices, start=1):
         row = df.loc[idx]
@@ -242,18 +250,30 @@ def review_websites() -> None:
         current_url = str(row.get("_website_url", "") or "").strip()
         current_confidence = str(row.get("_website_confidence", "") or "").strip()
         current_source = str(row.get("_website_source", "") or "").strip()
+        current_score = str(row.get("_website_score", "") or "").strip()
+        llm_url = str(row.get("_website_llm_url", "") or "").strip()
+        llm_agrees = str(row.get("_website_llm_agrees", "") or "").strip()
+        decision_stage = str(row.get("_website_decision_stage", "") or "").strip()
 
         console.print(f"[{position}/{len(queue_indices)}] [bold]{name}[/bold] ({location})")
         console.print(f"  Proposed URL: {current_url or '-'}")
         console.print(f"  Confidence: {current_confidence or '-'}")
+        console.print(f"  Score: {current_score or '-'}")
+        if decision_stage:
+            console.print(f"  Decision stage: {decision_stage}")
+        if llm_url:
+            console.print(f"  LLM URL: {llm_url}")
+            console.print(f"  LLM agrees: {llm_agrees or '-'}")
         console.print(f"  Source: {current_source or '-'}")
 
         decision = questionary.select(
             "Website decision",
             choices=[
                 "Accept proposed",
+                "Accept LLM alternative",
                 "Enter different website",
                 "No website exists",
+                "Exclude from pipeline",
                 "Skip",
                 "Quit",
             ],
@@ -273,9 +293,29 @@ def review_websites() -> None:
                 continue
             df.at[idx, "_website_needs_review"] = False
             df.at[idx, "_website_origin"] = "automatic"
+            df.at[idx, "_excluded_from_pipeline"] = "false"
+            df.at[idx, "_excluded_reason"] = ""
+            df.at[idx, "_excluded_at"] = ""
             accepted += 1
             _save_csv_atomic(df, input_path)
             console.print("  [green]-> Accepted proposed website[/green]\n")
+            continue
+
+        if decision == "Accept LLM alternative":
+            if not llm_url:
+                console.print("  [yellow]-> No LLM alternative URL available. Skipped.[/yellow]\n")
+                continue
+            df.at[idx, "_website_url"] = llm_url
+            df.at[idx, "_website_confidence"] = "manual"
+            df.at[idx, "_website_source"] = "manual: accepted llm alternative"
+            df.at[idx, "_website_needs_review"] = False
+            df.at[idx, "_website_origin"] = "manual_llm"
+            df.at[idx, "_excluded_from_pipeline"] = "false"
+            df.at[idx, "_excluded_reason"] = ""
+            df.at[idx, "_excluded_at"] = ""
+            accepted_llm += 1
+            _save_csv_atomic(df, input_path)
+            console.print(f"  [green]-> Accepted LLM website {llm_url}[/green]\n")
             continue
 
         if decision == "Enter different website":
@@ -289,6 +329,9 @@ def review_websites() -> None:
             df.at[idx, "_website_source"] = "manual: user input"
             df.at[idx, "_website_needs_review"] = False
             df.at[idx, "_website_origin"] = "manual"
+            df.at[idx, "_excluded_from_pipeline"] = "false"
+            df.at[idx, "_excluded_reason"] = ""
+            df.at[idx, "_excluded_at"] = ""
             manually_set += 1
             _save_csv_atomic(df, input_path)
             console.print(f"  [green]-> Set to {url}[/green]\n")
@@ -300,18 +343,44 @@ def review_websites() -> None:
             df.at[idx, "_website_source"] = "manual: none"
             df.at[idx, "_website_needs_review"] = False
             df.at[idx, "_website_origin"] = "manual_none"
+            df.at[idx, "_excluded_from_pipeline"] = "false"
+            df.at[idx, "_excluded_reason"] = ""
+            df.at[idx, "_excluded_at"] = ""
             marked_none += 1
             _save_csv_atomic(df, input_path)
             console.print("  [green]-> Marked as no website[/green]\n")
+            continue
+
+        if decision == "Exclude from pipeline":
+            reason = questionary.text("Reason for excluding this organization", qmark="?").ask()
+            reason = (reason or "").strip()
+            if not reason:
+                console.print("  [yellow]-> Reason required. Skipped.[/yellow]\n")
+                continue
+            timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+            df.at[idx, "_website_url"] = ""
+            df.at[idx, "_website_confidence"] = "excluded"
+            df.at[idx, "_website_source"] = f"manual: excluded ({reason})"
+            df.at[idx, "_website_needs_review"] = False
+            df.at[idx, "_website_origin"] = "manual_excluded"
+            df.at[idx, "_excluded_from_pipeline"] = "true"
+            df.at[idx, "_excluded_reason"] = reason
+            df.at[idx, "_excluded_at"] = timestamp
+            excluded_from_pipeline += 1
+            _save_csv_atomic(df, input_path)
+            console.print("  [green]-> Excluded from downstream pipeline[/green]\n")
 
     remaining_mask = (
         df["_website_url"].isna() | (df["_website_url"].astype(str).str.strip() == "")
     ) | (df["_website_needs_review"].apply(_is_true))
+    remaining_mask = remaining_mask & ~df["_excluded_from_pipeline"].apply(_is_true)
     remaining = int(remaining_mask.sum())
 
     console.print("[bold]Website review update[/bold]")
     console.print(f"  Accepted proposed: {accepted}")
+    console.print(f"  Accepted LLM alternative: {accepted_llm}")
     console.print(f"  Entered manually: {manually_set}")
     console.print(f"  Marked no website: {marked_none}")
+    console.print(f"  Excluded from pipeline: {excluded_from_pipeline}")
     console.print(f"  Remaining in queue: {remaining}")
     console.print(f"  File: {input_path}")

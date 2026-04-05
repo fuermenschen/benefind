@@ -53,6 +53,12 @@ class SearchConfig:
     provider: str = "brave"
     max_results: int = 10
     min_results_before_broad_search: int = 3
+    fallback_score_threshold: int = 25
+    fallback_min_score_gap: int = 8
+    auto_accept_score: int = 40
+    llm_verify_min_score: int = 20
+    llm_verify_max_score: int = 39
+    llm_verify_enabled: bool = True
     max_requests_per_second: float = 45.0
     max_workers: int = 20
     request_delay_seconds: float = 0.0

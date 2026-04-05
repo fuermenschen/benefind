@@ -55,8 +55,21 @@ provider = "brave"
 # Number of search results to consider
 max_results = 10
 
-# If exact quoted query returns fewer than this many results, run a broader unquoted query too
-min_results_before_broad_search = 2
+# Run a second query when first-pass best score is below this threshold.
+fallback_score_threshold = 25
+
+# Run a second query when top and runner-up domain scores are too close.
+fallback_min_score_gap = 8
+
+# Score >= this value is accepted directly.
+auto_accept_score = 40
+
+# Score band that goes through LLM web verification before decision.
+llm_verify_min_score = 20
+llm_verify_max_score = 39
+
+# Enable LLM web verification stage in discover.
+llm_verify_enabled = true
 
 # Max search request rate (Brave API limit: 50 req/s)
 max_requests_per_second = 45.0

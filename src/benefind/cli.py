@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import shutil
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import questionary
@@ -234,21 +235,50 @@ def discover(
         "--debug-seed",
         help="Optional random seed for reproducible debug sample selection.",
     ),
+    debug_org_id: str | None = typer.Option(
+        None,
+        "--debug-org-id",
+        help="Debug discover candidates for a specific _org_id.",
+    ),
+    debug_org_name: str | None = typer.Option(
+        None,
+        "--debug-org-name",
+        help="Debug discover candidates for a specific organization name (case-insensitive exact).",
+    ),
     stop_after: int | None = typer.Option(
         None,
         "--stop-after",
         help="Process at most N pending organizations, then exit cleanly.",
+    ),
+    llm_verify: bool | None = typer.Option(
+        None,
+        "--llm-verify/--no-llm-verify",
+        help="Enable LLM web verification for borderline website scores.",
     ),
 ) -> None:
     """Step 3a: Find websites for each organization."""
     import pandas as pd
 
     from benefind.config import DATA_DIR
-    from benefind.discover_websites import find_websites_batch, inspect_website_candidates
+    from benefind.discover_websites import (
+        find_website,
+        find_websites_batch,
+        inspect_website_candidates,
+    )
 
     settings = load_settings()
     _setup_logging(settings.log_level)
     interactive = wizard and sys.stdin.isatty() and sys.stdout.isatty()
+    llm_verify_enabled = settings.search.llm_verify_enabled if llm_verify is None else llm_verify
+
+    if interactive and llm_verify is None:
+        llm_choice = questionary.confirm(
+            "Use LLM web verification for borderline discover matches?",
+            default=settings.search.llm_verify_enabled,
+            qmark="?",
+        ).ask()
+        if llm_choice is not None:
+            llm_verify_enabled = llm_choice
 
     input_path = input_file or (DATA_DIR / "filtered" / "organizations_matched.csv")
     output_path = output_file or (DATA_DIR / "filtered" / "organizations_with_websites.csv")
@@ -263,13 +293,25 @@ def discover(
     def is_blank(series: pd.Series) -> pd.Series:
         return series.isna() | (series.astype(str).str.strip() == "")
 
-    def build_merge_key(df: pd.DataFrame, key_columns: list[str]) -> pd.Series:
-        return (
-            df[key_columns]
-            .fillna("")
+    def remaining_review_count(df: pd.DataFrame) -> int:
+        excluded_mask = (
+            df["_excluded_from_pipeline"]
             .astype(str)
-            .apply(lambda row: "|".join(v.strip().lower() for v in row), axis=1)
+            .str.strip()
+            .str.lower()
+            .isin({"true", "1", "yes"})
         )
+        needs_review_mask = (
+            df["_website_needs_review"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .isin({"true", "1", "yes"})
+        )
+        no_website_mask = df["_website_url"].isna() | (
+            df["_website_url"].astype(str).str.strip() == ""
+        )
+        return int(((no_website_mask | needs_review_mask) & ~excluded_mask).sum())
 
     base_df = pd.read_csv(input_path, encoding="utf-8-sig")
     if base_df.empty:
@@ -282,6 +324,10 @@ def discover(
     )
     if not name_column:
         raise typer.BadParameter("Could not detect organization name column in input CSV.")
+    if "_org_id" not in base_df.columns:
+        raise typer.BadParameter(
+            "Input CSV has no _org_id column. Re-run 'benefind parse' then 'benefind filter'."
+        )
 
     location_column = _detect_first_column(
         list(base_df.columns),
@@ -295,6 +341,15 @@ def discover(
         "_website_source",
         "_website_needs_review",
         "_website_origin",
+        "_website_score",
+        "_website_score_gap",
+        "_website_llm_url",
+        "_website_llm_agrees",
+        "_website_decision_stage",
+        "_discovered_at",
+        "_excluded_from_pipeline",
+        "_excluded_reason",
+        "_excluded_at",
     ]
 
     for col in result_columns:
@@ -320,45 +375,82 @@ def discover(
 
     if output_path.exists() and not refresh:
         existing_df = pd.read_csv(output_path, encoding="utf-8-sig")
-        key_columns = [name_column]
-        if location_column in base_df.columns and location_column in existing_df.columns:
-            key_columns.append(location_column)
+        if "_org_id" not in existing_df.columns:
+            raise typer.BadParameter(
+                "Existing discovered CSV has no _org_id column. Run discover with --refresh."
+            )
 
         existing_df = existing_df.copy()
-        existing_df["_merge_key"] = build_merge_key(existing_df, key_columns)
-        existing_df = existing_df.drop_duplicates(subset="_merge_key", keep="last")
+        existing_df = existing_df.drop_duplicates(subset="_org_id", keep="last")
 
         existing_result_columns = [c for c in result_columns if c in existing_df.columns]
-        existing_subset = existing_df[["_merge_key", *existing_result_columns]].rename(
+        existing_subset = existing_df[["_org_id", *existing_result_columns]].rename(
             columns={c: f"{c}_existing" for c in existing_result_columns}
         )
 
         base_df = base_df.copy()
-        base_df["_merge_key"] = build_merge_key(base_df, key_columns)
-        base_df = base_df.merge(existing_subset, on="_merge_key", how="left")
+        base_df = base_df.merge(existing_subset, on="_org_id", how="left")
 
         for col in existing_result_columns:
             existing_col = f"{col}_existing"
             base_df[col] = base_df[col].where(~is_blank(base_df[col]), base_df[existing_col])
             base_df = base_df.drop(columns=[existing_col])
 
-        base_df = base_df.drop(columns=["_merge_key"])
-
-    pending_mask = is_blank(base_df["_website_confidence"])
+    excluded_mask = (
+        base_df["_excluded_from_pipeline"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .isin({"true", "1", "yes"})
+    )
+    pending_mask = is_blank(base_df["_website_confidence"]) & ~excluded_mask
     pending_df = base_df[pending_mask]
 
-    if debug_sample:
+    if debug_org_id and debug_org_name:
+        raise typer.BadParameter("Use either --debug-org-id or --debug-org-name, not both.")
+
+    if debug_sample or debug_org_id or debug_org_name:
         import random
 
-        used_seed = (
-            debug_seed if debug_seed is not None else random.SystemRandom().randrange(1, 10**9)
-        )
-        sample_df = pending_df if not pending_df.empty else base_df
-        rng = random.Random(used_seed)
-        sample_index = rng.choice(list(sample_df.index))
-        sample_row = sample_df.loc[sample_index]
+        used_seed: int | None = None
+        sample_row = None
+
+        if debug_org_id:
+            matched_rows = base_df[
+                base_df["_org_id"].astype(str).str.strip() == debug_org_id.strip()
+            ]
+            if matched_rows.empty:
+                raise typer.BadParameter(
+                    f"No organization found for --debug-org-id={debug_org_id!r}"
+                )
+            sample_row = matched_rows.iloc[0]
+        elif debug_org_name:
+            target_name = debug_org_name.strip().lower()
+            matched_rows = base_df[
+                base_df[name_column].astype(str).str.strip().str.lower() == target_name
+            ]
+            if matched_rows.empty:
+                raise typer.BadParameter(
+                    f"No organization found for --debug-org-name={debug_org_name!r}"
+                )
+            if len(matched_rows) > 1:
+                console.print("[red]Multiple organizations match --debug-org-name.[/red]")
+                preview = matched_rows[["_org_id", name_column, location_column]].head(10)
+                console.print(preview.to_string(index=False))
+                raise typer.Exit(code=1)
+            sample_row = matched_rows.iloc[0]
+        else:
+            used_seed = (
+                debug_seed if debug_seed is not None else random.SystemRandom().randrange(1, 10**9)
+            )
+            sample_df = pending_df if not pending_df.empty else base_df
+            rng = random.Random(used_seed)
+            sample_index = rng.choice(list(sample_df.index))
+            sample_row = sample_df.loc[sample_index]
+
         org_name = str(sample_row.get(name_column, "")).strip()
         org_location = str(sample_row.get(location_column, "")).strip()
+        org_id = str(sample_row.get("_org_id", "")).strip()
 
         if not org_name:
             console.print("[red]Debug sample failed: selected row has no organization name.[/red]")
@@ -375,7 +467,9 @@ def discover(
             raise typer.Exit(code=1)
 
         console.print("[bold]Debug discover sample[/bold]")
-        console.print(f"Seed: {used_seed}")
+        if used_seed is not None:
+            console.print(f"Seed: {used_seed}")
+        console.print(f"Org ID: {org_id or '-'}")
         console.print(f"Org: {org_name}")
         console.print(f"Location: {org_location or '-'}")
         console.print(f"Query: {query}")
@@ -389,6 +483,23 @@ def discover(
             console.print(
                 f"[{rank}] score={candidate.score:>3} | {candidate.url} | {candidate.title}"
             )
+
+        debug_result = find_website(
+            org_name,
+            org_location,
+            settings,
+            llm_verify_enabled=llm_verify_enabled,
+        )
+        console.print("\n[bold]Decision simulation[/bold]")
+        console.print(f"Stage: {debug_result.decision_stage}")
+        console.print(f"Chosen URL: {debug_result.url or '-'}")
+        console.print(f"Needs review: {debug_result.needs_review}")
+        if debug_result.llm_prompt:
+            console.print("\n[bold]LLM verification prompt[/bold]")
+            console.print(debug_result.llm_prompt)
+        if debug_result.llm_response:
+            console.print("\n[bold]LLM verification response[/bold]")
+            console.print(debug_result.llm_response)
         return
 
     if pending_df.empty:
@@ -401,6 +512,17 @@ def discover(
         )
         console.print(f"Saved: {output_path}")
         console.print(f"[green]Websites present: {found_total}/{len(base_df)}[/green]")
+        remaining_review = remaining_review_count(base_df)
+        if interactive and remaining_review > 0:
+            launch_review = questionary.confirm(
+                f"{remaining_review} organizations still need website review. Start review now?",
+                default=True,
+                qmark="?",
+            ).ask()
+            if launch_review:
+                from benefind.review import review_websites
+
+                review_websites()
         return
 
     if stop_after is not None:
@@ -412,6 +534,7 @@ def discover(
 
     pending_indices = list(pending_df.index)
     pending_total = len(pending_indices)
+    discovered_at = datetime.now(UTC).isoformat(timespec="seconds")
     progress = {
         "completed": 0,
         "found": 0,
@@ -454,6 +577,12 @@ def discover(
         base_df.at[row_index, "_website_source"] = result.source
         base_df.at[row_index, "_website_needs_review"] = result.needs_review
         base_df.at[row_index, "_website_origin"] = "automatic"
+        base_df.at[row_index, "_website_score"] = result.score
+        base_df.at[row_index, "_website_score_gap"] = result.score_gap
+        base_df.at[row_index, "_website_llm_url"] = result.llm_url or ""
+        base_df.at[row_index, "_website_llm_agrees"] = result.llm_agrees
+        base_df.at[row_index, "_website_decision_stage"] = result.decision_stage
+        base_df.at[row_index, "_discovered_at"] = discovered_at
 
         progress["completed"] += 1
         if result.url:
@@ -472,6 +601,7 @@ def discover(
             settings,
             name_column=name_column,
             location_column=location_column,
+            llm_verify_enabled=llm_verify_enabled,
             on_result=on_result,
         )
     except KeyboardInterrupt:
@@ -487,6 +617,18 @@ def discover(
     console.print(f"{message}[/green]")
     console.print(f"[green]Websites present overall: {found_total}/{len(base_df)}[/green]")
     console.print(f"Saved: {output_path}")
+
+    remaining_review = remaining_review_count(base_df)
+    if interactive and remaining_review > 0:
+        launch_review = questionary.confirm(
+            f"{remaining_review} organizations still need website review. Start review now?",
+            default=True,
+            qmark="?",
+        ).ask()
+        if launch_review:
+            from benefind.review import review_websites
+
+            review_websites()
 
 
 @app.command()
@@ -521,6 +663,12 @@ def scrape(
             "Input CSV has no _website_url column. Run discover first to create it."
         )
 
+    if "_excluded_from_pipeline" not in df.columns:
+        df["_excluded_from_pipeline"] = False
+    excluded_mask = (
+        df["_excluded_from_pipeline"].astype(str).str.strip().str.lower().isin({"true", "1", "yes"})
+    )
+
     name_column = _detect_first_column(
         list(df.columns),
         NAME_COLUMN_CANDIDATES,
@@ -529,7 +677,9 @@ def scrape(
         raise typer.BadParameter("Could not detect organization name column in input CSV.")
 
     orgs_with_url = df[
-        df["_website_url"].notna() & (df["_website_url"].astype(str).str.strip() != "")
+        (df["_website_url"].notna())
+        & (df["_website_url"].astype(str).str.strip() != "")
+        & (~excluded_mask)
     ]
     if orgs_with_url.empty:
         console.print(
@@ -563,6 +713,7 @@ def scrape(
     console.print(f"  Scraped now: {success}")
     console.print(f"  Failed now: {failed}")
     console.print(f"  Skipped existing: {skipped_existing}")
+    console.print(f"  Excluded from pipeline: {int(excluded_mask.sum())}")
 
 
 @app.command()
@@ -589,6 +740,18 @@ def evaluate(
         console.print("[yellow]No organizations found in input file. Nothing to evaluate.[/yellow]")
         return
 
+    if "_excluded_from_pipeline" not in df.columns:
+        df["_excluded_from_pipeline"] = False
+    excluded_mask = (
+        df["_excluded_from_pipeline"].astype(str).str.strip().str.lower().isin({"true", "1", "yes"})
+    )
+    active_df = df[~excluded_mask].copy()
+    if active_df.empty:
+        console.print(
+            "[yellow]All organizations are excluded from pipeline. Nothing to evaluate.[/yellow]"
+        )
+        return
+
     name_column = _detect_first_column(
         list(df.columns),
         NAME_COLUMN_CANDIDATES,
@@ -607,9 +770,9 @@ def evaluate(
     if not name_column:
         raise typer.BadParameter("Could not detect organization name column in input CSV.")
 
-    console.print(f"Evaluating {len(df)} organizations...")
+    console.print(f"Evaluating {len(active_df)} organizations...")
     results = evaluate_batch(
-        df.to_dict("records"),
+        active_df.to_dict("records"),
         settings,
         name_column=name_column,
         location_column=location_column,
@@ -619,6 +782,7 @@ def evaluate(
     errors = sum(1 for r in results if r.get("_error"))
     console.print(f"\n[green]Evaluated {len(results)} organizations[/green]")
     console.print(f"[yellow]Errors: {errors}[/yellow]")
+    console.print(f"[dim]Excluded from pipeline: {int(excluded_mask.sum())}[/dim]")
 
 
 @app.command()

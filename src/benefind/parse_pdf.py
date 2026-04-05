@@ -6,14 +6,20 @@ organizations into a structured format (list of dicts / CSV).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 import pdfplumber
 
 from benefind.config import DATA_DIR, Settings
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +27,22 @@ NAME_COLUMN = (
     "Institutionen, die wegen Verfolgung von öffentlichen oder gemeinnützigen Zwecken\n"
     "steuerbefreit sind"
 )
+NAME_COLUMN_CANDIDATES = [
+    "Bezeichnung",
+    "Name",
+    "Institution",
+    "Institutionen, die wegen Verfolgung von öffentlichen oder gemeinnuetzigen Zwecken\n"
+    "steuerbefreit sind",
+    "Institutionen, die wegen Verfolgung von öffentlichen oder gemeinnützigen Zwecken\n"
+    "steuerbefreit sind",
+]
+
+
+def _detect_first_column(columns: list[str], candidates: list[str], default: str = "") -> str:
+    for candidate in candidates:
+        if candidate in columns:
+            return candidate
+    return default
 
 
 def _sanitize_text(value: str) -> str:
@@ -46,6 +68,56 @@ def _sanitize_record(record: dict) -> dict:
         else:
             cleaned[key] = value
     return cleaned
+
+
+def _normalize_id_text(value: object) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _stable_fingerprint(name: str, location: str, category: str) -> str:
+    key = "|".join(
+        [
+            _normalize_id_text(name),
+            _normalize_id_text(location),
+            _normalize_id_text(category),
+        ]
+    )
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+    return f"org_{digest}"
+
+
+def _assign_org_ids(df: pd.DataFrame) -> None:
+    import pandas as pd
+
+    name_column = _detect_first_column(list(df.columns), NAME_COLUMN_CANDIDATES)
+    if not name_column:
+        raise ValueError("Could not detect organization name column when assigning _org_id.")
+
+    location_column = _detect_first_column(
+        list(df.columns),
+        ["Sitzort", "Sitz", "Ort", "Gemeinde"],
+        default="Sitzort",
+    )
+    if location_column not in df.columns:
+        raise ValueError("Could not detect organization location column when assigning _org_id.")
+
+    category_column = _detect_first_column(list(df.columns), ["a/b*", "Kategorie"], default="a/b*")
+    if category_column not in df.columns:
+        df[category_column] = ""
+
+    fingerprints = [
+        _stable_fingerprint(name, location, category)
+        for name, location, category in zip(
+            df[name_column],
+            df[location_column],
+            df[category_column],
+            strict=False,
+        )
+    ]
+    counts = pd.Series(fingerprints).groupby(fingerprints).cumcount() + 1
+    df["_org_id"] = [f"{fp}_{count}" for fp, count in zip(fingerprints, counts, strict=False)]
 
 
 def download_pdf(settings: Settings, force: bool = False) -> Path:
@@ -245,6 +317,12 @@ def save_parsed(rows: list[dict], output_dir: Path | None = None) -> Path:
     output_path = output_dir / "organizations_all.csv"
 
     df = pd.DataFrame(rows)
+    parsed_at = datetime.now(UTC).isoformat(timespec="seconds")
+    if not df.empty:
+        _assign_org_ids(df)
+    else:
+        df["_org_id"] = pd.Series(dtype=str)
+    df["_parsed_at"] = parsed_at
     df.to_csv(output_path, index=False, encoding="utf-8-sig")
     logger.info("Saved %d rows to %s", len(rows), output_path)
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -234,6 +235,7 @@ def filter_organizations(
     else:
         df["_category_normalized"] = ""
         df["_category_is_allowed"] = True
+    df["_filtered_at"] = datetime.now(UTC).isoformat(timespec="seconds")
 
     name_column = _detect_first_column(list(df.columns), NAME_COLUMN_CANDIDATES)
     if name_column:
