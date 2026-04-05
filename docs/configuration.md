@@ -25,7 +25,11 @@ Search settings are in `settings.toml` under `[search]`:
 
 - `provider` (currently `brave`)
 - `max_results` (results per request; default `10`)
-- `min_results_before_broad_search` (quoted fallback trigger)
+- `fallback_score_threshold` (run second query when first-pass score is too low)
+- `fallback_min_score_gap` (run second query when top-vs-runner-up gap is too small)
+- `auto_accept_score` (high-confidence auto accept threshold)
+- `llm_verify_min_score` / `llm_verify_max_score` (score band for LLM verification)
+- `llm_verify_enabled` (enable/disable LLM verification stage)
 - `max_requests_per_second` (global request cap for parallel discovery workers)
 - `max_workers` (concurrent discovery workers)
 - `timeout_seconds`
@@ -35,7 +39,7 @@ Search settings are in `settings.toml` under `[search]`:
 Discovery query strategy:
 
 - primary query is unquoted (`org_name + location`) for better recall
-- quoted query fallback is used when primary results are too weak or too few
+- quoted query fallback is score-based (quality policy), not result-count-based
 
 Municipality matching lives in `config/municipalities.toml`:
 
@@ -53,5 +57,7 @@ Municipality matching lives in `config/municipalities.toml`:
 Website provenance values:
 
 - `_website_origin=automatic` (auto-discovered or accepted proposed URL)
+- `_website_origin=manual_llm` (user accepted LLM-proposed alternative URL)
 - `_website_origin=manual` (user-entered URL)
 - `_website_origin=manual_none` (explicitly marked as no website)
+- `_website_origin=manual_excluded` (excluded from downstream pipeline with reason)

@@ -65,11 +65,17 @@ uv run benefind filter --no-wizard
 - checkpoints after each processed organization (safe resume on interruption)
 - processes pending rows only by default; use `--refresh` to recompute all
 - supports early stop with `--stop-after N`
-- debug mode with reproducible sample and request count:
+- supports score-based fallback query strategy and optional LLM verification
+- writes decision metadata columns (`_website_score`, `_website_score_gap`, `_website_llm_url`, `_website_llm_agrees`, `_website_decision_stage`)
+- debug mode supports random sample or targeted org:
 
 ```bash
 uv run benefind discover --debug-sample --debug-seed 42
+uv run benefind discover --debug-org-id org_xxxxx_1
+uv run benefind discover --debug-org-name "Musikkollegium Winterthur"
 ```
+
+In debug mode, discover also prints the simulated final decision stage and, when LLM verification is triggered, the LLM verification prompt and response text.
 
 ## Full orchestrated run
 
@@ -87,8 +93,10 @@ uv run benefind review websites                     # review uncertain websites 
 Website review wizard actions:
 
 - accept proposed URL (keeps `_website_origin=automatic`)
+- accept LLM alternative URL (`_website_origin=manual_llm`)
 - enter a different URL (`_website_origin=manual`)
 - mark "no website exists" (`_website_origin=manual_none`)
+- exclude organization from downstream pipeline with required free-text reason (`_website_origin=manual_excluded`)
 - skip or quit
 
 Every website decision is persisted immediately.
