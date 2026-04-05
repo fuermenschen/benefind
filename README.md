@@ -52,6 +52,7 @@ This repository is in an exploratory phase.
 
 - some heuristics are intentionally conservative
 - manual review is a first-class step, not an exception
+- subset-first iteration is supported (`benefind subset` + incremental `benefind extend`)
 - prompts and thresholds are still being tuned with real-world examples
 - docs and developer ergonomics are actively being improved
 - implementation choices are optimized for this project, even when they are not universally reusable

@@ -937,6 +937,170 @@ def subset(
         )
 
 
+@app.command()
+def extend(
+    input_file: Path | None = typer.Option(
+        None,
+        "--input",
+        "-i",
+        help="Full-source CSV to extend from (default: filtered/matched .all)",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Subset CSV to extend (default: filtered/matched)",
+    ),
+    size: int | None = typer.Option(
+        None,
+        "--size",
+        "-n",
+        help="Target subset size after extension (default: double current size)",
+    ),
+    seed: int = typer.Option(
+        42,
+        "--seed",
+        help="Random seed for reproducible extension order",
+    ),
+    random_sample: bool = typer.Option(
+        True,
+        "--random/--head",
+        help="Pick new rows by random order (or source order with --head)",
+    ),
+) -> None:
+    """Extend an existing subset without recomputing already-processed rows."""
+    import pandas as pd
+
+    from benefind.config import DATA_DIR
+
+    if size is not None and size <= 0:
+        raise typer.BadParameter("--size must be greater than 0.")
+
+    default_subset_path = DATA_DIR / "filtered" / "organizations_matched.csv"
+    default_full_path = DATA_DIR / "filtered" / "organizations_matched.csv.all"
+
+    safe_mode = input_file is None and output_file is None
+    input_path = input_file or default_full_path
+    output_path = output_file or default_subset_path
+
+    if safe_mode and not default_full_path.exists():
+        if default_subset_path.exists():
+            console.print(
+                f"[red]Safe extend needs the parked full dataset:[/red] {default_full_path}"
+            )
+            console.print(
+                "Run [bold]benefind subset[/bold] once first to initialize subset safe mode."
+            )
+            raise typer.Exit(code=1)
+
+        console.print(f"[red]Input file not found:[/red] {default_full_path}")
+        console.print("Run [bold]benefind filter[/bold] then [bold]benefind subset[/bold] first.")
+        raise typer.Exit(code=1)
+
+    if not input_path.exists():
+        console.print(f"[red]Input file not found:[/red] {input_path}")
+        raise typer.Exit(code=1)
+    if not output_path.exists():
+        console.print(f"[red]Subset file not found:[/red] {output_path}")
+        console.print("Create an initial subset first with [bold]benefind subset[/bold].")
+        raise typer.Exit(code=1)
+
+    full_df = pd.read_csv(input_path, encoding="utf-8-sig")
+    subset_df = pd.read_csv(output_path, encoding="utf-8-sig")
+
+    if full_df.empty:
+        console.print("[yellow]Full source CSV is empty. Nothing to extend.[/yellow]")
+        return
+    if subset_df.empty:
+        console.print(
+            "[yellow]Subset CSV is empty. Use benefind subset to create a seed subset.[/yellow]"
+        )
+        return
+
+    if "_org_id" not in full_df.columns or "_org_id" not in subset_df.columns:
+        raise typer.BadParameter(
+            "Both source and subset CSV need _org_id. "
+            "Re-run 'benefind parse' then 'benefind filter'."
+        )
+
+    full_df = full_df.drop_duplicates(subset="_org_id", keep="first")
+    before_subset = len(subset_df)
+    subset_df = subset_df.drop_duplicates(subset="_org_id", keep="first")
+    deduped = before_subset - len(subset_df)
+    if deduped > 0:
+        console.print(
+            f"[yellow]Removed {deduped} duplicate _org_id rows from the existing subset.[/yellow]"
+        )
+
+    full_ids = set(full_df["_org_id"].astype(str).str.strip())
+    subset_ids = set(subset_df["_org_id"].astype(str).str.strip())
+    covered_ids = subset_ids & full_ids
+    stale_ids = subset_ids - full_ids
+
+    current_size = len(subset_df)
+    current_coverage = len(covered_ids)
+    full_size = len(full_ids)
+
+    if stale_ids:
+        console.print(
+            "[yellow]"
+            f"Subset contains {len(stale_ids)} _org_id values not present in source; "
+            "they are kept unchanged."
+            "[/yellow]"
+        )
+
+    if current_coverage >= full_size:
+        console.print("[green]Subset already covers the full source dataset.[/green]")
+        console.print(f"Coverage: {current_coverage}/{full_size} source rows")
+        if stale_ids:
+            console.print(f"[dim]Additional stale rows kept: {len(stale_ids)}[/dim]")
+        return
+
+    target_size = size if size is not None else current_coverage * 2
+    if target_size <= current_coverage:
+        console.print(
+            "[yellow]"
+            f"Target size ({target_size}) is not larger than current coverage ({current_coverage})."
+            "[/yellow]"
+        )
+        return
+    if target_size > full_size:
+        console.print(
+            "[yellow]"
+            f"Requested size {target_size} exceeds source size {full_size}; "
+            f"capping to {full_size}."
+            "[/yellow]"
+        )
+        target_size = full_size
+
+    additional_needed = target_size - current_coverage
+    remaining_df = full_df[~full_df["_org_id"].astype(str).str.strip().isin(covered_ids)]
+
+    if random_sample:
+        ordered_remaining = remaining_df.sample(frac=1, random_state=seed)
+        mode = f"random seed={seed}"
+    else:
+        ordered_remaining = remaining_df
+        mode = "head"
+
+    additions_df = ordered_remaining.head(additional_needed)
+    if additions_df.empty:
+        console.print("[yellow]No new rows available to add.[/yellow]")
+        return
+
+    extended_df = pd.concat([subset_df, additions_df], ignore_index=True)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    extended_df.to_csv(output_path, index=False, encoding="utf-8-sig")
+
+    console.print(
+        "[green]Extended subset "
+        f"{current_size} -> {len(extended_df)} rows "
+        f"(added {len(additions_df)}, {mode}).[/green]"
+    )
+    console.print(f"Saved: {output_path}")
+
+
 @app.command(name="delete")
 def delete_cmd(
     only: str | None = typer.Option(

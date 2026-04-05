@@ -31,6 +31,8 @@ Before editing behavior, read `docs/principles.md` and align with it.
 - Run pipeline steps:
   - `uv run benefind parse`
   - `uv run benefind filter` (wizard by default; use `--no-wizard` for non-interactive)
+  - `uv run benefind subset` (create initial cost-safe subset)
+  - `uv run benefind extend` (grow existing subset; default doubles size)
   - `uv run benefind discover`
   - `uv run benefind scrape`
   - `uv run benefind evaluate`
@@ -46,6 +48,7 @@ Before editing behavior, read `docs/principles.md` and align with it.
 - Pipeline state is persisted in CSV under `data/`; decisions are expected to survive interruptions.
 - Website review now supports manual exclusion with required reason; downstream `scrape/evaluate` skip excluded rows.
 - Discovery includes score + LLM verification metadata columns; keep them if you touch discover/review flow.
+- Incremental tuning workflow is subset-first: use `subset` once, then `extend` to add new rows without dropping old ones.
 
 ## Editing Expectations
 

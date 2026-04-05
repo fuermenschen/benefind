@@ -33,6 +33,23 @@ uv run benefind scrape
 uv run benefind evaluate
 ```
 
+After each quality/cost tuning pass, extend the same subset and re-run downstream
+steps. Default behavior doubles the current subset size (for example
+20 -> 40 -> 80 -> 160):
+
+```bash
+uv run benefind extend
+uv run benefind discover
+uv run benefind scrape
+uv run benefind evaluate
+```
+
+`benefind extend` is incremental:
+
+- keeps existing rows already present in `data/filtered/organizations_matched.csv`
+- adds only new rows from `data/filtered/organizations_matched.csv.all`
+- preserves `_org_id`-based continuity so downstream `discover` can keep old results and process only pending organizations
+
 `benefind subset` runs in a safe default mode when no `--input/--output` is
 provided:
 
@@ -45,6 +62,14 @@ Useful options:
 ```bash
 uv run benefind subset --size 50 --seed 7
 uv run benefind subset --head                 # first N rows instead of random
+```
+
+`benefind extend` options:
+
+```bash
+uv run benefind extend --size 120             # set explicit target size
+uv run benefind extend --seed 7               # deterministic random extension order
+uv run benefind extend --head                 # add next rows in source order
 ```
 
 `benefind filter` runs as an interactive wizard by default:

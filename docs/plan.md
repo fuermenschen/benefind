@@ -25,6 +25,9 @@ criteria.
   uses a transparent User-Agent string.
 - **Incremental execution**: Each pipeline step can be run independently. Results
   are checkpointed as CSV/JSON files so the process can be paused and resumed.
+  Subset-safe iteration is first-class: start small with `benefind subset`, then
+  ramp coverage with `benefind extend` (default doubling) while preserving prior
+  discoveries and manual review decisions.
 
 ---
 
