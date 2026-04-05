@@ -28,6 +28,7 @@ app = typer.Typer(
     name="benefind",
     help="AI-assisted screening of tax-exempt nonprofits for charity partnership matching.",
     no_args_is_help=True,
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 console = Console()
 
