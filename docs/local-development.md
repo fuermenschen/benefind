@@ -5,6 +5,7 @@
 - Python 3.12+
 - `uv`
 - Brave Search API key (for website discovery)
+- Firecrawl API key (optional, for discover fallback)
 - OpenAI API key
 
 ## Setup
@@ -21,6 +22,7 @@ uv sync
 cp .env.example .env
 # Edit .env and add:
 # - BRAVE_API_KEY (discover)
+# - FIRECRAWL_API_KEY (discover fallback, optional)
 # - OPENAI_API_KEY (evaluate)
 ```
 

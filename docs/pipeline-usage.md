@@ -66,6 +66,8 @@ uv run benefind filter --no-wizard
 - processes pending rows only by default; use `--refresh` to recompute all
 - supports early stop with `--stop-after N`
 - supports score-based fallback query strategy and optional LLM verification
+- uses a cascade for discovery decisions: Brave first, then LLM web search, then Firecrawl fallback
+- cross-provider URL agreement can auto-accept at `cross_provider_agree_min_score`
 - writes decision metadata columns (`_website_score`, `_website_score_gap`, `_website_llm_url`, `_website_llm_agrees`, `_website_decision_stage`)
 - debug mode supports random sample or targeted org:
 

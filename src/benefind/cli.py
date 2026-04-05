@@ -7,6 +7,7 @@ as well as a full pipeline run.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import sys
 from datetime import UTC, datetime
@@ -261,7 +262,6 @@ def discover(
 
     from benefind.config import DATA_DIR
     from benefind.discover_websites import (
-        find_website,
         find_websites_batch,
         inspect_website_candidates,
     )
@@ -271,14 +271,21 @@ def discover(
     interactive = wizard and sys.stdin.isatty() and sys.stdout.isatty()
     llm_verify_enabled = settings.search.llm_verify_enabled if llm_verify is None else llm_verify
 
-    if interactive and llm_verify is None:
-        llm_choice = questionary.confirm(
-            "Use LLM web verification for borderline discover matches?",
-            default=settings.search.llm_verify_enabled,
+    if interactive:
+        paid_services = ["Brave Search"]
+        if llm_verify_enabled:
+            paid_services.append("OpenAI")
+        if settings.search.firecrawl_enabled and os.environ.get("FIRECRAWL_API_KEY", ""):
+            paid_services.append("Firecrawl")
+        services_label = ", ".join(paid_services)
+        proceed = questionary.confirm(
+            (f"Warning: discover may use paid services ({services_label}). Proceed?"),
+            default=False,
             qmark="?",
         ).ask()
-        if llm_choice is not None:
-            llm_verify_enabled = llm_choice
+        if not proceed:
+            console.print("[yellow]Discover cancelled.[/yellow]")
+            return
 
     input_path = input_file or (DATA_DIR / "filtered" / "organizations_matched.csv")
     output_path = output_file or (DATA_DIR / "filtered" / "organizations_with_websites.csv")
@@ -457,10 +464,13 @@ def discover(
             raise typer.Exit(code=1)
 
         try:
-            query, candidates, request_count = inspect_website_candidates(
-                org_name,
-                org_location,
-                settings,
+            query, candidates, request_count, llm_candidates, fc_candidates, debug_result = (
+                inspect_website_candidates(
+                    org_name,
+                    org_location,
+                    settings,
+                    llm_verify_enabled=llm_verify_enabled,
+                )
             )
         except Exception as e:
             console.print(f"[red]Debug discover sample failed:[/red] {e}")
@@ -479,17 +489,36 @@ def discover(
             console.print("[yellow]No candidates returned by search API.[/yellow]")
             return
 
+        console.print("\n[bold]Brave Search candidates[/bold]")
         for rank, candidate in enumerate(candidates, start=1):
             console.print(
                 f"[{rank}] score={candidate.score:>3} | {candidate.url} | {candidate.title}"
             )
 
-        debug_result = find_website(
-            org_name,
-            org_location,
-            settings,
-            llm_verify_enabled=llm_verify_enabled,
-        )
+        if llm_candidates is not None:
+            console.print("\n[bold]After LLM search candidate merge[/bold]")
+            for rank, candidate in enumerate(llm_candidates, start=1):
+                console.print(
+                    f"[{rank}] score={candidate.score:>3} | {candidate.url} | {candidate.title}"
+                )
+        elif not llm_verify_enabled:
+            console.print("\n[dim]LLM tier: disabled[/dim]")
+        else:
+            console.print("\n[dim]LLM tier: not applied (no usable LLM URL)[/dim]")
+
+        if fc_candidates is not None:
+            console.print("\n[bold]After Firecrawl fallback (merged candidates)[/bold]")
+            for rank, candidate in enumerate(fc_candidates, start=1):
+                console.print(
+                    f"[{rank}] score={candidate.score:>3} | {candidate.url} | {candidate.title}"
+                )
+        elif not settings.search.firecrawl_enabled:
+            console.print("\n[dim]Firecrawl fallback: disabled in settings[/dim]")
+        elif not os.environ.get("FIRECRAWL_API_KEY", ""):
+            console.print("\n[dim]Firecrawl fallback: FIRECRAWL_API_KEY not set[/dim]")
+        else:
+            console.print("\n[dim]Firecrawl fallback: not applied[/dim]")
+
         console.print("\n[bold]Decision simulation[/bold]")
         console.print(f"Stage: {debug_result.decision_stage}")
         console.print(f"Chosen URL: {debug_result.url or '-'}")

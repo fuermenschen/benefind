@@ -29,17 +29,24 @@ Search settings are in `settings.toml` under `[search]`:
 - `fallback_min_score_gap` (run second query when top-vs-runner-up gap is too small)
 - `auto_accept_score` (high-confidence auto accept threshold)
 - `llm_verify_min_score` / `llm_verify_max_score` (score band for LLM verification)
+- `cross_provider_agree_min_score` (accept threshold when two providers agree on URL)
 - `llm_verify_enabled` (enable/disable LLM verification stage)
 - `max_requests_per_second` (global request cap for parallel discovery workers)
 - `max_workers` (concurrent discovery workers)
 - `timeout_seconds`
 - `max_retries`
 - `retry_backoff_seconds`
+- `firecrawl_enabled` (enable/disable Firecrawl fallback search)
+- `firecrawl_max_results`
+- `firecrawl_timeout_seconds`
+- `firecrawl_max_retries`
 
 Discovery query strategy:
 
 - primary query is unquoted (`org_name + location`) for better recall
 - quoted query fallback is score-based (quality policy), not result-count-based
+- discovery decision cascade is Brave -> LLM web search -> Firecrawl fallback
+- URLs from LLM are only considered when the target URL is reachable (quick title fetch)
 
 Municipality matching lives in `config/municipalities.toml`:
 

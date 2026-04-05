@@ -68,6 +68,9 @@ auto_accept_score = 40
 llm_verify_min_score = 20
 llm_verify_max_score = 39
 
+# If two independent providers agree on a URL, accept at this score threshold.
+cross_provider_agree_min_score = 20
+
 # Enable LLM web verification stage in discover.
 llm_verify_enabled = true
 
@@ -88,6 +91,19 @@ max_retries = 3
 
 # Base backoff delay for retries in seconds (exponential backoff)
 retry_backoff_seconds = 1.0
+
+# Firecrawl search fallback (uses Google-based index, better coverage for small orgs)
+# Triggered when Brave + LLM fail to converge on a confident answer.
+firecrawl_enabled = true
+
+# Number of search results to request from Firecrawl
+firecrawl_max_results = 10
+
+# HTTP timeout in seconds for Firecrawl API calls
+firecrawl_timeout_seconds = 30
+
+# Max retries for transient Firecrawl API errors
+firecrawl_max_retries = 2
 
 [llm]
 # OpenAI model to use for evaluation

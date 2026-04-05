@@ -58,6 +58,7 @@ class SearchConfig:
     auto_accept_score: int = 40
     llm_verify_min_score: int = 20
     llm_verify_max_score: int = 39
+    cross_provider_agree_min_score: int = 20
     llm_verify_enabled: bool = True
     max_requests_per_second: float = 45.0
     max_workers: int = 20
@@ -65,6 +66,10 @@ class SearchConfig:
     timeout_seconds: int = 15
     max_retries: int = 3
     retry_backoff_seconds: float = 1.0
+    firecrawl_enabled: bool = True
+    firecrawl_max_results: int = 10
+    firecrawl_timeout_seconds: int = 30
+    firecrawl_max_retries: int = 2
 
 
 @dataclass
