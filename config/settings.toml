@@ -48,6 +48,18 @@ user_agent = "benefind/0.1 (nonprofit research; https://hfm-winti.ch)"
 # Respect robots.txt
 respect_robots_txt = true
 
+# Prepare-scraping scope: keep same-host URLs only by default
+prepare_include_subdomains = false
+
+# Prepare-scraping URL planning limits (sitemap-first, then local-link fallback)
+prepare_max_urls_per_org = 200
+prepare_sitemap_max_files = 50
+prepare_sitemap_max_depth = 4
+prepare_fallback_max_visits = 120
+
+# Concurrent organization-level workers for prepare-scraping
+prepare_max_workers = 8
+
 [search]
 # Search provider: "brave"
 provider = "brave"

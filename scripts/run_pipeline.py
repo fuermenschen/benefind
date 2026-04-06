@@ -4,6 +4,11 @@
 This script orchestrates all pipeline steps in sequence, with checkpoints
 between each step so you can review intermediate results before continuing.
 
+Implementation maturity note:
+Steps from scrape onward are first-shot implementations and may lag behind
+current discovery/review schema evolution. Validate column and artifact
+alignment before using script outputs for final decisions.
+
 Usage:
     uv run python scripts/run_pipeline.py
     uv run python scripts/run_pipeline.py --from filter   # resume from a specific step
@@ -26,7 +31,7 @@ from benefind.config import DATA_DIR, PROJECT_ROOT, load_settings
 load_dotenv(PROJECT_ROOT / ".env")
 
 
-STEPS = ["parse", "filter", "discover", "scrape", "evaluate", "report"]
+STEPS = ["parse", "filter", "discover", "prepare-scraping", "scrape", "evaluate", "report"]
 
 
 def confirm(message: str) -> bool:
@@ -122,13 +127,75 @@ def step_discover(settings):
 
 
 def step_scrape(settings):
-    """Step 3b: Scrape websites."""
+    """Step 3c: Scrape websites."""
     import pandas as pd
 
-    from benefind.scrape import scrape_organization
+    from benefind.prepare_scraping import load_org_targets
+    from benefind.scrape import scrape_organization_urls
 
     print("\n" + "=" * 60)
-    print("STEP 3b: Scrape websites")
+    print("STEP 3c: Scrape websites")
+    print("=" * 60)
+
+    input_path = DATA_DIR / "filtered" / "organizations_scrape_prep.csv"
+    if not input_path.exists():
+        print(f"ERROR: {input_path} not found. Run the prepare-scraping step first.")
+        return False
+
+    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    required = {"_org_id", "_org_name", "_scrape_prep_status", "_scrape_targets_file"}
+    if not required.issubset(df.columns):
+        print("ERROR: scrape prep summary CSV is missing required columns.")
+        return False
+
+    ready_df = df[df["_scrape_prep_status"].astype(str).str.strip() == "ready"].copy()
+    ready_df = ready_df.drop_duplicates(subset="_org_id", keep="last")
+
+    live_websites_path = DATA_DIR / "filtered" / "organizations_with_websites.csv"
+    excluded_org_ids: set[str] = set()
+    if live_websites_path.exists():
+        live_df = pd.read_csv(live_websites_path, encoding="utf-8-sig")
+        if "_org_id" in live_df.columns:
+            if "_excluded_reason" not in live_df.columns:
+                live_df["_excluded_reason"] = ""
+            excluded_mask = live_df["_excluded_reason"].astype(str).str.strip() != ""
+            excluded_org_ids = {
+                str(value).strip()
+                for value in live_df.loc[excluded_mask, "_org_id"].tolist()
+                if str(value).strip()
+            }
+
+    if excluded_org_ids:
+        ready_df = ready_df[~ready_df["_org_id"].astype(str).str.strip().isin(excluded_org_ids)]
+
+    print(f"Scraping {len(ready_df)} organizations with prepared URL targets...")
+
+    for i, (_, row) in enumerate(ready_df.iterrows()):
+        name = str(row.get("_org_name", "Unknown"))
+        targets_file = str(row.get("_scrape_targets_file", "")).strip()
+        if not targets_file:
+            continue
+        urls = load_org_targets(Path(targets_file))
+        if not urls:
+            continue
+        print(f"\n[{i + 1}/{len(ready_df)}] {name}: {len(urls)} urls")
+        scrape_organization_urls(name, urls, settings)
+
+    return True
+
+
+def step_prepare_scraping(settings):
+    """Step 3b: Prepare scraping scope and target URLs."""
+    import pandas as pd
+
+    from benefind.prepare_scraping import (
+        PrepareCheckpointWriter,
+        load_prepare_summary,
+        prepare_scraping_batch,
+    )
+
+    print("\n" + "=" * 60)
+    print("STEP 3b: Prepare scraping")
     print("=" * 60)
 
     input_path = DATA_DIR / "filtered" / "organizations_with_websites.csv"
@@ -137,27 +204,55 @@ def step_scrape(settings):
         return False
 
     df = pd.read_csv(input_path, encoding="utf-8-sig")
-    orgs_with_url = df[df["_website_url"].notna() & (df["_website_url"] != "")]
+    if "_org_id" not in df.columns or "_website_url" not in df.columns:
+        print("ERROR: input CSV missing required _org_id/_website_url columns.")
+        return False
 
-    print(f"Scraping {len(orgs_with_url)} organizations with known websites...")
+    if "_excluded_reason" not in df.columns:
+        df["_excluded_reason"] = ""
+    excluded_mask = df["_excluded_reason"].astype(str).str.strip() != ""
+    active_df = df[~excluded_mask].copy()
 
-    for i, (_, row) in enumerate(orgs_with_url.iterrows()):
-        name = row.get("Bezeichnung", "Unknown")
-        url = row["_website_url"]
-        print(f"\n[{i + 1}/{len(orgs_with_url)}] {name}: {url}")
-        scrape_organization(name, url, settings)
+    name_column = "Bezeichnung" if "Bezeichnung" in active_df.columns else active_df.columns[0]
+    summary_path = DATA_DIR / "filtered" / "organizations_scrape_prep.csv"
+    existing_rows, existing_org_ids = load_prepare_summary(summary_path)
+    pending_df = active_df[
+        ~active_df["_org_id"].astype(str).str.strip().isin(existing_org_ids)
+    ].copy()
 
+    if pending_df.empty:
+        print("No pending organizations for prepare-scraping.")
+        print(f"Summary CSV: {summary_path}")
+        return True
+
+    writer = PrepareCheckpointWriter(summary_path, existing_rows=existing_rows)
+
+    def on_result(summary: dict, targets: list[dict]) -> None:
+        writer.upsert(summary, targets)
+
+    summaries = prepare_scraping_batch(
+        pending_df.to_dict("records"),
+        settings,
+        org_id_column="_org_id",
+        name_column=name_column,
+        website_column="_website_url",
+        on_result=on_result,
+    )
+
+    print(f"Prepared {len(summaries)} organizations")
+    print(f"Summary CSV: {summary_path}")
+    print("Targets are written per org under data/orgs/<_org_id>/scrape_prep/sitemap_urls.csv")
     return True
 
 
 def step_evaluate(settings):
-    """Step 3c: LLM evaluation."""
+    """Step 3d: LLM evaluation."""
     import pandas as pd
 
     from benefind.evaluate import evaluate_batch
 
     print("\n" + "=" * 60)
-    print("STEP 3c: Evaluate organizations with LLM")
+    print("STEP 3d: Evaluate organizations with LLM")
     print("=" * 60)
 
     input_path = DATA_DIR / "filtered" / "organizations_with_websites.csv"
@@ -200,6 +295,7 @@ STEP_FUNCTIONS = {
     "parse": step_parse,
     "filter": step_filter,
     "discover": step_discover,
+    "prepare-scraping": step_prepare_scraping,
     "scrape": step_scrape,
     "evaluate": step_evaluate,
     "report": step_report,

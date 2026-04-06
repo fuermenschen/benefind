@@ -2,6 +2,12 @@
 
 Loads scraped website content, fills in prompt templates, and sends them to
 the OpenAI API. Stores structured answers per organization for later reporting.
+
+Implementation maturity note:
+This is a first-shot implementation based on earlier workflow assumptions.
+Since discovery/review schema and decision columns changed over time, validate
+that evaluate input/output expectations still align before treating results as
+production-ready.
 """
 
 from __future__ import annotations

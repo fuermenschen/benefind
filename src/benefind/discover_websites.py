@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
+# TODO: check if async would make sense here
 
 from benefind.config import Settings
 from benefind.external_api import (

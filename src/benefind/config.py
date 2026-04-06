@@ -46,6 +46,12 @@ class ScrapingConfig:
     timeout_seconds: int = 30
     user_agent: str = "benefind/0.1 (nonprofit research; https://hfm-winti.ch)"
     respect_robots_txt: bool = True
+    prepare_include_subdomains: bool = False
+    prepare_max_urls_per_org: int = 200
+    prepare_sitemap_max_files: int = 50
+    prepare_sitemap_max_depth: int = 4
+    prepare_fallback_max_visits: int = 120
+    prepare_max_workers: int = 8
 
 
 @dataclass

@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
+
+# TODO: check if async would make sense here
 import pdfplumber
 
 from benefind.config import DATA_DIR, Settings

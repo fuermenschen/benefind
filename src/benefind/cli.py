@@ -764,24 +764,82 @@ def discover(
 
 
 @app.command()
-def scrape(
+def prepare_scraping(
     input_file: Path | None = typer.Option(
-        None, "--input", "-i", help="Path to filtered CSV with website URLs"
+        None,
+        "--input",
+        "-i",
+        help="Path to CSV with discovered website URLs",
     ),
-    refresh_existing: bool = typer.Option(
+    summary_output: Path | None = typer.Option(
+        None,
+        "--summary-output",
+        help="Path to output CSV with per-organization prep status",
+    ),
+    refresh: bool = typer.Option(
         False,
-        "--refresh-existing",
-        help="Re-scrape organizations that already have saved pages.",
+        "--refresh",
+        help="Recompute organizations already present in prepare summary.",
+    ),
+    debug_sample: bool = typer.Option(
+        False,
+        "--debug-sample",
+        help="Run a single random organization prep and print sampled output.",
+    ),
+    debug_seed: int | None = typer.Option(
+        None,
+        "--debug-seed",
+        help="Optional random seed for reproducible debug sample selection.",
+    ),
+    debug_org_id: str | None = typer.Option(
+        None,
+        "--debug-org-id",
+        help="Target a specific _org_id in debug sample mode.",
+    ),
+    subset: bool = typer.Option(
+        False,
+        "--subset",
+        help="Prepare only a random subset of organizations.",
+    ),
+    subset_size: int = typer.Option(
+        10,
+        "--size",
+        "-n",
+        help="Number of organizations to include when --subset is enabled.",
+    ),
+    subset_seed: int = typer.Option(
+        42,
+        "--subset-seed",
+        help="Random seed used for --subset sampling.",
+    ),
+    workers: int | None = typer.Option(
+        None,
+        "--workers",
+        help="Optional override for concurrent organization prep workers.",
     ),
 ) -> None:
-    """Step 3b: Scrape organization websites."""
+    """Step 3b: Prepare scraping scope and URL targets.
+
+    Derives robots policy + scope per organization website and writes
+    checkpointed prep artifacts: one global summary CSV plus one per-org
+    prepared URL CSV (no content filtering).
+    """
     import pandas as pd
 
     from benefind.config import DATA_DIR
-    from benefind.scrape import _slugify, scrape_organization
+    from benefind.prepare_scraping import (
+        PrepareCheckpointWriter,
+        load_prepare_summary,
+        prepare_scraping_batch,
+    )
 
     settings = load_settings()
     _setup_logging(settings.log_level)
+
+    if workers is not None:
+        if workers <= 0:
+            raise typer.BadParameter("--workers must be greater than 0.")
+        settings.scraping.prepare_max_workers = workers
 
     input_path = input_file or (DATA_DIR / "filtered" / "organizations_with_websites.csv")
     if not input_path.exists():
@@ -790,14 +848,27 @@ def scrape(
         raise typer.Exit(code=1)
 
     df = pd.read_csv(input_path, encoding="utf-8-sig")
-    if "_website_url" not in df.columns:
+    if "_org_id" not in df.columns:
         raise typer.BadParameter(
-            "Input CSV has no _website_url column. Run discover first to create it."
+            "Input CSV has no _org_id column. Re-run 'benefind parse' then 'benefind filter'."
         )
+    if "_website_url" not in df.columns:
+        raise typer.BadParameter("Input CSV has no _website_url column. Run discover first.")
 
     if "_excluded_reason" not in df.columns:
         df["_excluded_reason"] = ""
     excluded_mask = has_exclusion_reason_series(df["_excluded_reason"])
+    active_df = df[~excluded_mask].copy()
+    if active_df.empty:
+        console.print("[yellow]No active organizations available. Nothing to prepare.[/yellow]")
+        return
+
+    if subset and subset_size <= 0:
+        raise typer.BadParameter("--size/-n must be greater than 0 when --subset is used.")
+    if debug_org_id and not debug_sample:
+        raise typer.BadParameter("--debug-org-id requires --debug-sample.")
+    if debug_sample and subset:
+        raise typer.BadParameter("Use either --debug-sample or --subset, not both.")
 
     name_column = _detect_first_column(
         list(df.columns),
@@ -806,25 +877,254 @@ def scrape(
     if not name_column:
         raise typer.BadParameter("Could not detect organization name column in input CSV.")
 
-    orgs_with_url = df[
-        (df["_website_url"].notna())
-        & (df["_website_url"].astype(str).str.strip() != "")
-        & (~excluded_mask)
-    ]
-    if orgs_with_url.empty:
+    sample_mode = "full"
+    working_df = active_df
+    effective_seed = subset_seed
+
+    summary_path = summary_output or (DATA_DIR / "filtered" / "organizations_scrape_prep.csv")
+    existing_rows, existing_org_ids = load_prepare_summary(summary_path)
+    if not refresh and not debug_sample:
+        working_df = working_df[
+            ~working_df["_org_id"].astype(str).str.strip().isin(existing_org_ids)
+        ]
+
+    skipped_existing = 0
+    if not debug_sample:
+        skipped_existing = len(active_df) - len(working_df)
+
+    if debug_sample:
+        sample_mode = "debug_sample"
+        if debug_org_id:
+            selected = active_df[
+                active_df["_org_id"].astype(str).str.strip() == debug_org_id.strip()
+            ]
+            if selected.empty:
+                raise typer.BadParameter(
+                    f"No organization found for --debug-org-id={debug_org_id!r}"
+                )
+            working_df = selected.head(1)
+            effective_seed = "-"
+        else:
+            effective_seed = debug_seed if debug_seed is not None else subset_seed
+            working_df = active_df.sample(n=1, random_state=effective_seed)
+    elif subset:
+        sample_mode = "subset"
+        count = min(subset_size, len(working_df))
+        working_df = working_df.sample(n=count, random_state=subset_seed)
+
+    if not debug_sample and working_df.empty:
+        console.print("[yellow]No pending organizations for prepare-scraping.[/yellow]")
+        print_summary(
+            "Prepare Scraping Results",
+            [
+                ("Organizations processed", 0),
+                ("Skipped existing", skipped_existing),
+                ("Summary CSV", str(summary_path)),
+            ],
+        )
+        return
+
+    console.print(f"Preparing scraping targets for {len(working_df)} organizations...")
+    writer = None
+    debug_targets: list[dict] = []
+    if not debug_sample:
+        writer = PrepareCheckpointWriter(summary_path, existing_rows=existing_rows)
+
+    def on_result(summary: dict, targets: list[dict]) -> None:
+        if writer is not None:
+            writer.upsert(summary, targets)
+            return
+        debug_targets.extend(targets)
+
+    summaries = prepare_scraping_batch(
+        working_df.to_dict("records"),
+        settings,
+        org_id_column="_org_id",
+        name_column=name_column,
+        website_column="_website_url",
+        on_result=on_result,
+    )
+
+    if debug_sample:
+        summary_df = pd.DataFrame(summaries)
+        targets_df = pd.DataFrame(debug_targets)
+        console.print(make_panel("Debug sample mode: outputs are not written to CSV.", "Info"))
+        if not summary_df.empty:
+            row = summary_df.iloc[0]
+            org_name = str(row.get("_org_name", "Unknown"))
+            org_id = str(row.get("_org_id", ""))
+            status = str(row.get("_scrape_prep_status", ""))
+            robots = str(row.get("_scrape_robots_policy", ""))
+            scope_mode = str(row.get("_scrape_scope_mode", ""))
+            console.print(
+                make_panel(
+                    f"[bold]{org_name}[/bold]\n"
+                    f"_org_id: {org_id}\n"
+                    f"status: {status}\n"
+                    f"robots: {robots}\n"
+                    f"scope: {scope_mode}\n"
+                    f"prepared urls: {int(row.get('_scrape_prepared_url_count', 0))}",
+                    "Prepare Scraping Debug Sample",
+                )
+            )
+        if not targets_df.empty:
+            preview_df = targets_df[
+                ["_prepared_url_order", "_prepared_url_source", "_prepared_url"]
+            ].head(15)
+            console.print(preview_df.to_string(index=False))
+        return
+
+    summary_df = pd.DataFrame(summaries)
+    ready_count = (
+        int((summary_df["_scrape_prep_status"] == "ready").sum()) if not summary_df.empty else 0
+    )
+    blocked_count = (
+        int((summary_df["_scrape_prep_status"] == "blocked").sum()) if not summary_df.empty else 0
+    )
+    no_url_count = (
+        int((summary_df["_scrape_prep_status"] == "no_urls").sum()) if not summary_df.empty else 0
+    )
+
+    print_summary(
+        "Prepare Scraping Results",
+        [
+            ("Organizations processed", len(summaries)),
+            ("Skipped existing", skipped_existing),
+            ("Ready organizations", ready_count),
+            ("Blocked by robots", blocked_count),
+            ("No URLs discovered", no_url_count),
+            ("Excluded from pipeline", int(excluded_mask.sum())),
+            ("Mode", sample_mode),
+            (
+                "Sampling seed",
+                effective_seed if sample_mode in {"subset", "debug_sample"} else "-",
+            ),
+            ("Workers", int(settings.scraping.prepare_max_workers)),
+            ("Summary CSV", str(summary_path)),
+        ],
+    )
+
+
+@app.command()
+def scrape(
+    input_file: Path | None = typer.Option(
+        None,
+        "--input",
+        "-i",
+        help="Path to prepare-scraping summary CSV",
+    ),
+    refresh_existing: bool = typer.Option(
+        False,
+        "--refresh-existing",
+        help="Re-scrape organizations that already have saved pages.",
+    ),
+) -> None:
+    """Step 3c: Scrape organization websites.
+
+    Implementation maturity note:
+    This command drives a first-shot scrape implementation. Verify current CSV
+    schema and exclusion semantics alignment before relying on output.
+    """
+    import pandas as pd
+
+    from benefind.config import DATA_DIR
+    from benefind.scrape import _slugify, scrape_organization_urls
+
+    settings = load_settings()
+    _setup_logging(settings.log_level)
+
+    from benefind.prepare_scraping import load_org_targets
+
+    input_path = input_file or (DATA_DIR / "filtered" / "organizations_scrape_prep.csv")
+    if not input_path.exists():
+        print_error(f"Input file not found: {input_path}")
         console.print(
-            "[yellow]No organizations with website URLs found. Nothing to scrape.[/yellow]"
+            "Run [bold]benefind prepare-scraping[/bold] first or pass [bold]--input[/bold]."
+        )
+        raise typer.Exit(code=1)
+
+    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    required_columns = {"_org_id", "_org_name", "_scrape_prep_status", "_scrape_targets_file"}
+    if not required_columns.issubset(df.columns):
+        raise typer.BadParameter(
+            "Input CSV missing required prepare columns. Run prepare-scraping first to create it."
+        )
+
+    if df.empty:
+        console.print("[yellow]No prepared scrape targets found. Nothing to scrape.[/yellow]")
+        return
+
+    prep_ready_df = df[df["_scrape_prep_status"].astype(str).str.strip() == "ready"].copy()
+    if prep_ready_df.empty:
+        console.print("[yellow]No organizations with ready prepare-scraping status.[/yellow]")
+        return
+
+    prep_ready_df = prep_ready_df.drop_duplicates(subset="_org_id", keep="last")
+
+    excluded_org_ids: set[str] = set()
+    live_websites_path = DATA_DIR / "filtered" / "organizations_with_websites.csv"
+    if live_websites_path.exists():
+        live_df = pd.read_csv(live_websites_path, encoding="utf-8-sig")
+        if "_org_id" in live_df.columns:
+            if "_excluded_reason" not in live_df.columns:
+                live_df["_excluded_reason"] = ""
+            live_excluded_mask = has_exclusion_reason_series(live_df["_excluded_reason"])
+            excluded_org_ids = {
+                str(value).strip()
+                for value in live_df.loc[live_excluded_mask, "_org_id"].tolist()
+                if str(value).strip()
+            }
+    else:
+        console.print(
+            "[yellow]Live exclusion source not found:[/yellow] "
+            f"{live_websites_path}. Scrape exclusion sync skipped."
+        )
+
+    before_exclusion_filter = len(prep_ready_df)
+    if excluded_org_ids:
+        prep_ready_df = prep_ready_df[
+            ~prep_ready_df["_org_id"].astype(str).str.strip().isin(excluded_org_ids)
+        ]
+    skipped_excluded = before_exclusion_filter - len(prep_ready_df)
+
+    if prep_ready_df.empty:
+        console.print(
+            "[yellow]No organizations remain after applying current exclusion state.[/yellow]"
+        )
+        print_summary(
+            "Scrape Results",
+            [
+                ("Scraped now", 0),
+                ("Failed now", 0),
+                ("Skipped existing", 0),
+                ("Skipped missing targets", 0),
+                ("Skipped excluded", skipped_excluded),
+            ],
         )
         return
 
     success = 0
     failed = 0
     skipped_existing = 0
+    skipped_no_targets = 0
 
-    console.print(f"Scraping websites for {len(orgs_with_url)} organizations...")
-    for i, (_, row) in enumerate(orgs_with_url.iterrows(), start=1):
-        name = str(row.get(name_column, "Unknown")).strip() or "Unknown"
-        url = str(row.get("_website_url", "")).strip()
+    console.print(f"Scraping websites for {len(prep_ready_df)} organizations...")
+    for i, (_, row) in enumerate(prep_ready_df.iterrows(), start=1):
+        name = str(row.get("_org_name", "Unknown")).strip() or "Unknown"
+        targets_file_raw = str(row.get("_scrape_targets_file", "")).strip()
+        if not targets_file_raw:
+            skipped_no_targets += 1
+            continue
+
+        targets_path = Path(targets_file_raw)
+        if not targets_path.is_absolute():
+            targets_path = (DATA_DIR.parent / targets_path).resolve()
+
+        urls = load_org_targets(targets_path)
+        if not urls:
+            skipped_no_targets += 1
+            continue
+
         slug = _slugify(name)
         pages_dir = DATA_DIR / "orgs" / slug / "pages"
 
@@ -832,8 +1132,8 @@ def scrape(
             skipped_existing += 1
             continue
 
-        console.print(f"[dim][{i}/{len(orgs_with_url)}][/dim] {name}")
-        org_dir = scrape_organization(name, url, settings)
+        console.print(f"[dim][{i}/{len(prep_ready_df)}][/dim] {name}")
+        org_dir = scrape_organization_urls(name, urls, settings)
         if org_dir:
             success += 1
         else:
@@ -845,7 +1145,8 @@ def scrape(
             ("Scraped now", success),
             ("Failed now", failed),
             ("Skipped existing", skipped_existing),
-            ("Excluded from pipeline", int(excluded_mask.sum())),
+            ("Skipped missing targets", skipped_no_targets),
+            ("Skipped excluded", skipped_excluded),
         ],
     )
 
@@ -854,7 +1155,12 @@ def scrape(
 def evaluate(
     input_file: Path | None = typer.Option(None, "--input", "-i", help="Path to filtered CSV"),
 ) -> None:
-    """Step 3c: Evaluate organizations using LLM."""
+    """Step 3d: Evaluate organizations using LLM.
+
+    Implementation maturity note:
+    This command drives a first-shot evaluate implementation. Verify current
+    discovery/review output columns still align with evaluate assumptions.
+    """
     import pandas as pd
 
     from benefind.config import DATA_DIR
@@ -933,7 +1239,12 @@ def evaluate(
 
 @app.command()
 def report() -> None:
-    """Step 4: Generate the final summary report."""
+    """Step 4: Generate the final summary report.
+
+    Implementation maturity note:
+    Reporting is currently a first-shot implementation and should be validated
+    against the current evaluation artifact shape before final use.
+    """
     from benefind.report import generate_report
 
     settings = load_settings()
@@ -1478,7 +1789,7 @@ def review(
 
 @app.command()
 def run() -> None:
-    """Run the full pipeline (parse -> filter -> discover -> scrape -> evaluate -> report)."""
+    """Run full pipeline steps from parse to report."""
     settings = load_settings()
     _setup_logging(settings.log_level)
 
@@ -1489,6 +1800,7 @@ def run() -> None:
             "  [cyan]benefind parse[/cyan]\n"
             "  [cyan]benefind filter[/cyan]\n"
             "  [cyan]benefind discover[/cyan]\n"
+            "  [cyan]benefind prepare-scraping[/cyan]\n"
             "  [cyan]benefind scrape[/cyan]\n"
             "  [cyan]benefind evaluate[/cyan]\n"
             "  [cyan]benefind report[/cyan]",

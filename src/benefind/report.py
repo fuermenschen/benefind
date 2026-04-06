@@ -2,6 +2,11 @@
 
 Generates a summary CSV/Excel file and optional markdown report that can be
 reviewed by the team to make final decisions about beneficiary partners.
+
+Implementation maturity note:
+This is a first-shot reporting layer built against an earlier evaluation shape.
+Because upstream discovery/review/evaluate artifacts evolved, confirm schema
+alignment before using report output as the final decision surface.
 """
 
 from __future__ import annotations

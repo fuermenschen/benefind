@@ -6,6 +6,7 @@
 uv run benefind parse
 uv run benefind filter
 uv run benefind discover
+uv run benefind prepare-scraping
 uv run benefind scrape
 uv run benefind evaluate
 uv run benefind report
@@ -17,8 +18,9 @@ uv run benefind report
 uv run benefind parse       # Step 1: Download & parse PDF
 uv run benefind filter      # Step 2: Filter to Bezirk Winterthur
 uv run benefind discover    # Step 3a: Find org websites
-uv run benefind scrape      # Step 3b: Scrape websites
-uv run benefind evaluate    # Step 3c: LLM evaluation
+uv run benefind prepare-scraping  # Step 3b: robots/sitemap URL planning
+uv run benefind scrape      # Step 3c: Scrape websites
+uv run benefind evaluate    # Step 3d: LLM evaluation
 uv run benefind report      # Step 4: Generate report
 ```
 
@@ -29,6 +31,7 @@ To avoid burning API credits during iteration, create a small subset first:
 ```bash
 uv run benefind subset              # default: 20 random rows
 uv run benefind discover
+uv run benefind prepare-scraping
 uv run benefind scrape
 uv run benefind evaluate
 ```
@@ -40,6 +43,7 @@ steps. Default behavior doubles the current subset size (for example
 ```bash
 uv run benefind extend
 uv run benefind discover
+uv run benefind prepare-scraping
 uv run benefind scrape
 uv run benefind evaluate
 ```
@@ -133,6 +137,38 @@ Every website decision is persisted immediately.
 `benefind evaluate` also fails fast on unrecoverable OpenAI access issues
 (quota exhausted, missing key, invalid/forbidden key). Completed and partial
 `evaluation.json` files are kept so you can resume after fixing credentials/quota.
+
+`benefind prepare-scraping` behavior highlights:
+
+- derives robots policy status per organization website (`allowed`, `blocked`, `unknown`)
+- derives URL scope from seed website URL:
+  - host scope for root-like seeds
+  - path-prefix scope for deep subpage seeds
+- default scope is same-host only; subdomains are excluded unless `scraping.prepare_include_subdomains=true`
+- discovers URLs sitemap-first, then local-link fallback (no content filtering in this step)
+- writes two artifacts:
+  - `data/filtered/organizations_scrape_prep.csv` (per-org prep status)
+  - `data/orgs/<_org_id>/scrape_prep/sitemap_urls.csv` (prepared URL list per org)
+- supports quick probes:
+  - `uv run benefind prepare-scraping --debug-sample`
+  - `uv run benefind prepare-scraping --subset -n 10`
+- runs organization prep concurrently (config: `scraping.prepare_max_workers`, optional CLI override `--workers`)
+- persists results incrementally after each organization, so interrupted runs keep completed work
+
+## Alignment check for steps 3b+
+
+Scrape/evaluate/report are currently first-shot implementations from an earlier
+workflow baseline. Since website discovery + manual review changed significantly,
+run a quick alignment check before relying on downstream outputs:
+
+- verify `data/filtered/organizations_with_websites.csv` contains expected
+  decision columns (`_website_url`, `_website_needs_review`, `_excluded_reason`,
+  `_website_origin`, score/decision metadata)
+- verify exclusion semantics still match expectations for `scrape` and `evaluate`
+  (excluded rows should be skipped)
+- run `discover -> review websites -> prepare-scraping -> scrape -> evaluate -> report` on a small
+  subset first and inspect artifacts under `data/orgs/` and `data/reports/`
+- if schema assumptions changed, update step-local logic and docs in one pass
 
 ## Data cleanup
 

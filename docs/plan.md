@@ -146,38 +146,42 @@ These steps are self-contained and require no API keys.
 #### Step 3.1: robots.txt Checking
 - **File**: `src/benefind/scrape.py`
 - **What**: Before scraping, check if we're allowed to
-- **Status**: Implemented
+- **Status**: Implemented (first-shot; alignment re-check needed)
 - **Implementation notes**:
   - Uses `robotexclusionrulesparser`
   - If robots.txt disallows our path, skip and log the reason
   - Most small nonprofit sites don't have a robots.txt at all
+  - This step was implemented before later discovery/review schema changes;
+    verify current column/exclusion assumptions before relying on output
 
 #### Step 3.2: Page Discovery
 - **File**: `src/benefind/scrape.py`
 - **What**: Find which pages on a site are worth scraping
-- **Status**: Implemented
+- **Status**: Implemented (first-shot; alignment re-check needed)
 - **Implementation notes**:
   - Check a list of common paths (/about, /ueber-uns, /projekte, etc.)
   - Also crawl homepage links to find relevant pages
   - Limit to same-domain links only
   - Cap at `max_pages_per_org` (default 10)
+  - Validate this behavior against the current website decision columns
 
 #### Step 3.3: HTML to Markdown Conversion
 - **File**: `src/benefind/scrape.py`
 - **What**: Fetch pages and convert to clean markdown
-- **Status**: Implemented
+- **Status**: Implemented (first-shot; alignment re-check needed)
 - **Implementation notes**:
   - Strip scripts, styles, nav, header, footer elements
   - Use `markdownify` for HTML -> markdown conversion
   - Clean up excessive whitespace
   - Store as `data/orgs/<slug>/pages/<page-slug>.md`
+  - Re-validate assumptions about what qualifies as an active/scrapable row
 
 ### Phase 4: LLM Evaluation (Step 3c)
 
 #### Step 4.1: Prompt Template System
 - **File**: `config/prompts.toml`, `src/benefind/evaluate.py`
 - **What**: Configurable prompt templates with placeholders
-- **Status**: Implemented
+- **Status**: Implemented (first-shot; alignment re-check needed)
 - **Current prompts**:
   - `target_group`: Who does the org serve?
   - `serves_people`: Does it primarily serve people (vs. animals, environment)?
@@ -193,7 +197,7 @@ These steps are self-contained and require no API keys.
 #### Step 4.2: LLM API Integration
 - **File**: `src/benefind/evaluate.py`
 - **What**: Send prompts to OpenAI API, collect structured answers
-- **Status**: Implemented
+- **Status**: Implemented (first-shot; alignment re-check needed)
 - **Implementation notes**:
   - Uses `openai` SDK (reads `OPENAI_API_KEY` from environment)
   - Default model: `gpt-4o-mini` (cheap, fast, sufficient for this task)
@@ -201,13 +205,15 @@ These steps are self-contained and require no API keys.
   - Scraped content is concatenated and truncated to 30k chars
   - Results saved as `data/orgs/<slug>/evaluation.json`
   - Errors are caught and recorded (no silent failures)
+  - Verify that current upstream columns and exclusion decisions still map cleanly
+    into evaluate input rows
 
 ### Phase 5: Reporting (Step 4)
 
 #### Step 5.1: Summary Report Generation
 - **File**: `src/benefind/report.py`
 - **What**: Compile all evaluations into a human-readable report
-- **Status**: Implemented
+- **Status**: Implemented (first-shot; alignment re-check needed)
 - **Output formats**:
   - `data/reports/summary.csv` - flat table for spreadsheet review
   - `data/reports/summary.md` - formatted markdown for easy reading
@@ -215,6 +221,7 @@ These steps are self-contained and require no API keys.
   - Collects all `evaluation.json` files from `data/orgs/*/`
   - Builds a flat table with one row per org, columns per prompt answer
   - Markdown report has a section per org with all answers
+  - Confirm report assumptions against the current `evaluation.json` shape
 
 ---
 
@@ -254,11 +261,13 @@ These steps are self-contained and require no API keys.
 
 ## Next Steps (Priority Order)
 
-1. **Run Step 1 for the first time** against the real PDF to discover the actual
-   table structure and column names, then adjust the parser accordingly.
-2. **Run Step 2** to get the filtered list and validate the municipality matching.
-3. **Implement Step 3a** (website discovery) with a search API.
-4. **Run Steps 3b and 3c** on the first few organizations to validate the
-   scraping and evaluation pipeline.
-5. **Iterate on prompts** based on the quality of LLM answers.
-6. **Run the full pipeline** and review the final report with the team.
+1. **Run an alignment pass for Step 3b+**: verify `scrape/evaluate/report`
+   assumptions against the current discovered/reviewed CSV schema.
+2. **Validate exclusion semantics end-to-end**: ensure excluded organizations
+   are skipped consistently in scrape/evaluate and absent from final summaries.
+3. **Run a subset-based regression** (`subset -> discover -> review websites ->
+   scrape -> evaluate -> report`) and inspect generated artifacts manually.
+4. **Adjust step-local schema handling where needed** and update docs in the
+   same pass when columns/decision metadata assumptions change.
+5. **Iterate prompt quality** after schema alignment is confirmed.
+6. **Revisit full orchestration** once downstream alignment is stable.

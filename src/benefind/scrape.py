@@ -3,6 +3,12 @@
 Downloads key pages from each organization's website, converts HTML to markdown,
 and stores the content locally for later analysis. Respects robots.txt and
 implements rate limiting.
+
+Implementation maturity note:
+This is a first-shot implementation based on the initial post-discovery schema.
+Upstream website-discovery and manual-review fields evolved afterward. Before
+relying on scrape outputs, verify that CSV columns and exclusion semantics still
+align with current pipeline assumptions.
 """
 
 from __future__ import annotations
@@ -14,6 +20,8 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import httpx
+
+# TODO: check if async would make sense here
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 from robotexclusionrulesparser import RobotExclusionRulesParser
@@ -229,6 +237,56 @@ def scrape_organization(
             scraped_count += 1
 
         time.sleep(delay)
+
+    if scraped_count == 0:
+        logger.warning("Could not scrape any pages for %s", org_name)
+        return None
+
+    logger.info("Scraped %d pages for %s -> %s", scraped_count, org_name, org_dir)
+    return org_dir
+
+
+def scrape_organization_urls(
+    org_name: str,
+    urls: list[str],
+    settings: Settings,
+) -> Path | None:
+    """Scrape a precomputed list of URLs for one organization.
+
+    Assumes URL planning (robots/scope/discovery) already happened in
+    `prepare-scraping` and applies only fetch/convert/store behavior here.
+    """
+    slug = _slugify(org_name)
+    org_dir = DATA_DIR / "orgs" / slug
+    pages_dir = org_dir / "pages"
+    pages_dir.mkdir(parents=True, exist_ok=True)
+
+    user_agent = settings.scraping.user_agent
+    timeout = settings.scraping.timeout_seconds
+    delay = settings.scraping.request_delay_seconds
+    max_pages = settings.scraping.max_pages_per_org
+
+    scraped_count = 0
+    used_slugs: set[str] = set()
+
+    for url in urls[:max_pages]:
+        content = scrape_page(url, user_agent, timeout)
+        if not content:
+            if delay > 0:
+                time.sleep(delay)
+            continue
+
+        page_slug = _slugify(f"{urlparse(url).netloc}-{urlparse(url).path or 'index'}")
+        if page_slug in used_slugs:
+            page_slug = _slugify(f"{page_slug}-{scraped_count + 1}")
+        used_slugs.add(page_slug)
+
+        page_path = pages_dir / f"{page_slug}.md"
+        page_path.write_text(content, encoding="utf-8")
+        scraped_count += 1
+
+        if delay > 0:
+            time.sleep(delay)
 
     if scraped_count == 0:
         logger.warning("Could not scrape any pages for %s", org_name)
