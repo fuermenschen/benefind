@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import webbrowser
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import pandas as pd
 
@@ -30,7 +32,7 @@ from benefind.cli_ui import (
     print_warning,
     wait_for_key,
 )
-from benefind.config import DATA_DIR
+from benefind.config import DATA_DIR, load_settings
 from benefind.exclusion_reasons import (
     EXCLUDE_REASON_OPTIONS,
     ExcludeReason,
@@ -55,6 +57,7 @@ _WEBSITE_ACTIONS = [
     ("a", "Accept proposed"),
     ("l", "Accept LLM alt"),
     ("e", "Enter URL"),
+    ("f", "Find on web"),
     ("n", "No website"),
     ("i", "Irrelevant"),
     ("x", "Liquidation"),
@@ -118,6 +121,34 @@ def _text_or_empty(value: object) -> str:
 
 def _decision_key(name: str, location: str) -> str:
     return f"{(name or '').strip().lower()}|{(location or '').strip().lower()}"
+
+
+def _normalize_review_search_engine(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized in {"duckduckgo", "google"}:
+        return normalized
+    return "duckduckgo"
+
+
+def _build_review_search_url(name: str, location: str, engine: str) -> str:
+    query = " ".join(part for part in [name.strip(), location.strip()] if part).strip()
+    encoded_query = quote_plus(query)
+    if engine == "google":
+        return f"https://www.google.com/search?q={encoded_query}"
+    return f"https://duckduckgo.com/?q={encoded_query}"
+
+
+def _open_review_search(name: str, location: str, engine: str) -> tuple[bool, str]:
+    query = " ".join(part for part in [name.strip(), location.strip()] if part).strip()
+    if not query:
+        return False, ""
+
+    url = _build_review_search_url(name, location, engine)
+    try:
+        opened = webbrowser.open_new_tab(url)
+    except webbrowser.Error:
+        return False, url
+    return bool(opened), url
 
 
 def _save_location_decisions(
@@ -378,6 +409,12 @@ def review_locations() -> dict[str, int]:
 def review_websites() -> None:
     """Review uncertain website matches and persist each decision immediately."""
     input_path = DATA_DIR / "filtered" / "organizations_with_websites.csv"
+    settings = load_settings()
+    configured_search_engine = str(settings.search.review_search_engine or "")
+    review_search_engine = _normalize_review_search_engine(configured_search_engine)
+
+    if configured_search_engine.strip().lower() not in {"duckduckgo", "google"}:
+        print_warning("Invalid search.review_search_engine setting. Falling back to duckduckgo.")
 
     if not input_path.exists():
         console.print(f"[yellow]No file found at {input_path}[/yellow]")
@@ -420,6 +457,7 @@ def review_websites() -> None:
     accepted_proposed = 0
     accepted_llm = 0
     entered_manually = 0
+    quit_requested = False
 
     for position, idx in enumerate(queue_indices, start=1):
         progress.current = position - 1
@@ -434,180 +472,197 @@ def review_websites() -> None:
         llm_agrees = str(row.get("_website_llm_agrees", "") or "").strip()
         decision_stage = str(row.get("_website_decision_stage", "") or "").strip()
 
-        clear()
-        console.print(progress.as_panel("Website Review"))
-        _website_org_panel(name, location, position, len(queue_indices))
-        _website_info_panel(
-            current_url,
-            current_confidence,
-            current_score,
-            current_source,
-            decision_stage,
-            llm_url,
-            llm_agrees,
-        )
-        _website_actions_panel()
-
-        try:
-            key = wait_for_key(_WEBSITE_VALID_KEYS)
-        except KeyboardInterrupt:
-            break
-
-        if key in ("q", "esc"):
-            break
-
-        if key == "s":
-            print_skip("Skipped")
-            progress.mark_skipped()
-            continue
-
-        # ── Accept proposed ──────────────────────────────────────────────
-        if key == "a":
-            if not current_url:
-                print_warning("No proposed URL available — skipped.")
-                progress.mark_skipped()
-                continue
-            if confirm(f"Accept proposed URL  {current_url}?"):
-                df.at[idx, "_website_needs_review"] = False
-                df.at[idx, "_website_origin"] = "automatic"
-                df.at[idx, "_excluded_reason"] = ""
-                df.at[idx, "_excluded_reason_note"] = ""
-                df.at[idx, "_excluded_at"] = ""
-                accepted_proposed += 1
-                progress.mark_accepted()
-                _save_csv_atomic(df, input_path)
-                print_success(f"Accepted: {current_url}")
-            else:
-                print_skip("Cancelled — skipped")
-                progress.mark_skipped()
-            continue
-
-        # ── Accept LLM alternative ───────────────────────────────────────
-        if key == "l":
-            if not llm_url:
-                print_warning("No LLM alternative URL available — skipped.")
-                progress.mark_skipped()
-                continue
-            if confirm(f"Accept LLM URL  {llm_url}?"):
-                df.at[idx, "_website_url"] = llm_url
-                df.at[idx, "_website_confidence"] = "manual"
-                df.at[idx, "_website_source"] = "manual: accepted llm alternative"
-                df.at[idx, "_website_needs_review"] = False
-                df.at[idx, "_website_origin"] = "manual_llm"
-                df.at[idx, "_excluded_reason"] = ""
-                df.at[idx, "_excluded_reason_note"] = ""
-                df.at[idx, "_excluded_at"] = ""
-                accepted_llm += 1
-                progress.mark_accepted()
-                _save_csv_atomic(df, input_path)
-                print_success(f"Accepted LLM URL: {llm_url}")
-            else:
-                print_skip("Cancelled — skipped")
-                progress.mark_skipped()
-            continue
-
-        # ── Enter different URL ──────────────────────────────────────────
-        if key == "e":
-            url = ask_text("Website URL", default=current_url)
-            if not url:
-                print_skip("Empty URL — skipped.")
-                progress.mark_skipped()
-                continue
-            if confirm(f"Use URL  {url}?"):
-                df.at[idx, "_website_url"] = url
-                df.at[idx, "_website_confidence"] = "manual"
-                df.at[idx, "_website_source"] = "manual: user input"
-                df.at[idx, "_website_needs_review"] = False
-                df.at[idx, "_website_origin"] = "manual"
-                df.at[idx, "_excluded_reason"] = ""
-                df.at[idx, "_excluded_reason_note"] = ""
-                df.at[idx, "_excluded_at"] = ""
-                entered_manually += 1
-                progress.mark_accepted()
-                _save_csv_atomic(df, input_path)
-                print_success(f"Set to: {url}")
-            else:
-                print_skip("Cancelled — skipped")
-                progress.mark_skipped()
-            continue
-
-        # ── No website (NO_INFORMATION) ──────────────────────────────────
-        if key == "n":
-            if confirm(f"Mark '{name}' as NO_INFORMATION (no website found)?"):
-                timestamp = datetime.now(UTC).isoformat(timespec="seconds")
-                df.at[idx, "_website_url"] = ""
-                df.at[idx, "_website_confidence"] = "excluded"
-                df.at[idx, "_website_source"] = (
-                    f"manual: excluded ({ExcludeReason.NO_INFORMATION.value})"
-                )
-                df.at[idx, "_website_needs_review"] = False
-                df.at[idx, "_website_origin"] = "manual_excluded"
-                df.at[idx, "_excluded_reason"] = ExcludeReason.NO_INFORMATION.value
-                df.at[idx, "_excluded_reason_note"] = ""
-                df.at[idx, "_excluded_at"] = timestamp
-                progress.mark_excluded()
-                _save_csv_atomic(df, input_path)
-                print_success("Excluded: no information available")
-            else:
-                print_skip("Cancelled — skipped")
-                progress.mark_skipped()
-            continue
-
-        # ── Shortcut exclusion keys (i / x / d) ─────────────────────────
-        _shortcut_exclusion = {
-            "i": ExcludeReason.IRRELEVANT_PURPOSE,
-            "x": ExcludeReason.IN_LIQUIDATION,
-            "d": ExcludeReason.NOT_EXIST,
-        }
-        if key in _shortcut_exclusion:
-            reason = _shortcut_exclusion[key]
-            # Find human label
-            label = next(
-                (opt.label for opt in EXCLUDE_REASON_OPTIONS if opt.reason == reason),
-                reason.value,
+        while True:
+            clear()
+            console.print(progress.as_panel("Website Review"))
+            _website_org_panel(name, location, position, len(queue_indices))
+            _website_info_panel(
+                current_url,
+                current_confidence,
+                current_score,
+                current_source,
+                decision_stage,
+                llm_url,
+                llm_agrees,
             )
-            if confirm(f"Exclude '{name}' — {label}?"):
-                timestamp = datetime.now(UTC).isoformat(timespec="seconds")
-                df.at[idx, "_website_url"] = ""
-                df.at[idx, "_website_confidence"] = "excluded"
-                df.at[idx, "_website_source"] = f"manual: excluded ({reason.value})"
-                df.at[idx, "_website_needs_review"] = False
-                df.at[idx, "_website_origin"] = "manual_excluded"
-                df.at[idx, "_excluded_reason"] = reason.value
-                df.at[idx, "_excluded_reason_note"] = ""
-                df.at[idx, "_excluded_at"] = timestamp
-                progress.mark_excluded()
-                _save_csv_atomic(df, input_path)
-                print_success(f"Excluded: {label}")
-            else:
-                print_skip("Cancelled — skipped")
-                progress.mark_skipped()
-            continue
+            _website_actions_panel()
 
-        # ── Other (free text) ────────────────────────────────────────────
-        if key == "o":
-            note = ask_text("Reason (required)")
-            if not note:
-                print_warning("Reason is required for OTHER — skipped.")
-                progress.mark_skipped()
+            try:
+                key = wait_for_key(_WEBSITE_VALID_KEYS)
+            except KeyboardInterrupt:
+                quit_requested = True
+                break
+
+            if key in ("q", "esc"):
+                quit_requested = True
+                break
+
+            if key == "f":
+                opened, search_url = _open_review_search(name, location, review_search_engine)
+                if not search_url:
+                    print_warning("Cannot search: organization name and location are empty.")
+                elif opened:
+                    print_success(f"Opened search: {search_url}")
+                else:
+                    print_warning(f"Could not open browser automatically. URL: {search_url}")
                 continue
-            if confirm(f"Exclude '{name}' — Other: {note}?"):
-                timestamp = datetime.now(UTC).isoformat(timespec="seconds")
-                df.at[idx, "_website_url"] = ""
-                df.at[idx, "_website_confidence"] = "excluded"
-                df.at[idx, "_website_source"] = f"manual: excluded ({ExcludeReason.OTHER.value})"
-                df.at[idx, "_website_needs_review"] = False
-                df.at[idx, "_website_origin"] = "manual_excluded"
-                df.at[idx, "_excluded_reason"] = ExcludeReason.OTHER.value
-                df.at[idx, "_excluded_reason_note"] = note
-                df.at[idx, "_excluded_at"] = timestamp
-                progress.mark_excluded()
-                _save_csv_atomic(df, input_path)
-                print_success(f"Excluded (Other): {note}")
-            else:
-                print_skip("Cancelled — skipped")
+
+            if key == "s":
+                print_skip("Skipped")
                 progress.mark_skipped()
-            continue
+                break
+
+            # ── Accept proposed ──────────────────────────────────────────────
+            if key == "a":
+                if not current_url:
+                    print_warning("No proposed URL available — skipped.")
+                    progress.mark_skipped()
+                    break
+                if confirm(f"Accept proposed URL  {current_url}?"):
+                    df.at[idx, "_website_needs_review"] = False
+                    df.at[idx, "_website_origin"] = "automatic"
+                    df.at[idx, "_excluded_reason"] = ""
+                    df.at[idx, "_excluded_reason_note"] = ""
+                    df.at[idx, "_excluded_at"] = ""
+                    accepted_proposed += 1
+                    progress.mark_accepted()
+                    _save_csv_atomic(df, input_path)
+                    print_success(f"Accepted: {current_url}")
+                else:
+                    print_skip("Cancelled — skipped")
+                    progress.mark_skipped()
+                break
+
+            # ── Accept LLM alternative ───────────────────────────────────────
+            if key == "l":
+                if not llm_url:
+                    print_warning("No LLM alternative URL available — skipped.")
+                    progress.mark_skipped()
+                    break
+                if confirm(f"Accept LLM URL  {llm_url}?"):
+                    df.at[idx, "_website_url"] = llm_url
+                    df.at[idx, "_website_confidence"] = "manual"
+                    df.at[idx, "_website_source"] = "manual: accepted llm alternative"
+                    df.at[idx, "_website_needs_review"] = False
+                    df.at[idx, "_website_origin"] = "manual_llm"
+                    df.at[idx, "_excluded_reason"] = ""
+                    df.at[idx, "_excluded_reason_note"] = ""
+                    df.at[idx, "_excluded_at"] = ""
+                    accepted_llm += 1
+                    progress.mark_accepted()
+                    _save_csv_atomic(df, input_path)
+                    print_success(f"Accepted LLM URL: {llm_url}")
+                else:
+                    print_skip("Cancelled — skipped")
+                    progress.mark_skipped()
+                break
+
+            # ── Enter different URL ──────────────────────────────────────────
+            if key == "e":
+                url = ask_text("Website URL", default=current_url)
+                if not url:
+                    print_skip("Empty URL — skipped.")
+                    progress.mark_skipped()
+                    break
+                if confirm(f"Use URL  {url}?"):
+                    df.at[idx, "_website_url"] = url
+                    df.at[idx, "_website_confidence"] = "manual"
+                    df.at[idx, "_website_source"] = "manual: user input"
+                    df.at[idx, "_website_needs_review"] = False
+                    df.at[idx, "_website_origin"] = "manual"
+                    df.at[idx, "_excluded_reason"] = ""
+                    df.at[idx, "_excluded_reason_note"] = ""
+                    df.at[idx, "_excluded_at"] = ""
+                    entered_manually += 1
+                    progress.mark_accepted()
+                    _save_csv_atomic(df, input_path)
+                    print_success(f"Set to: {url}")
+                else:
+                    print_skip("Cancelled — skipped")
+                    progress.mark_skipped()
+                break
+
+            # ── No website (NO_INFORMATION) ──────────────────────────────────
+            if key == "n":
+                if confirm(f"Mark '{name}' as NO_INFORMATION (no website found)?"):
+                    timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+                    df.at[idx, "_website_url"] = ""
+                    df.at[idx, "_website_confidence"] = "excluded"
+                    df.at[idx, "_website_source"] = (
+                        f"manual: excluded ({ExcludeReason.NO_INFORMATION.value})"
+                    )
+                    df.at[idx, "_website_needs_review"] = False
+                    df.at[idx, "_website_origin"] = "manual_excluded"
+                    df.at[idx, "_excluded_reason"] = ExcludeReason.NO_INFORMATION.value
+                    df.at[idx, "_excluded_reason_note"] = ""
+                    df.at[idx, "_excluded_at"] = timestamp
+                    progress.mark_excluded()
+                    _save_csv_atomic(df, input_path)
+                    print_success("Excluded: no information available")
+                else:
+                    print_skip("Cancelled — skipped")
+                    progress.mark_skipped()
+                break
+
+            # ── Shortcut exclusion keys (i / x / d) ─────────────────────────
+            _shortcut_exclusion = {
+                "i": ExcludeReason.IRRELEVANT_PURPOSE,
+                "x": ExcludeReason.IN_LIQUIDATION,
+                "d": ExcludeReason.NOT_EXIST,
+            }
+            if key in _shortcut_exclusion:
+                reason = _shortcut_exclusion[key]
+                label = next(
+                    (opt.label for opt in EXCLUDE_REASON_OPTIONS if opt.reason == reason),
+                    reason.value,
+                )
+                if confirm(f"Exclude '{name}' — {label}?"):
+                    timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+                    df.at[idx, "_website_url"] = ""
+                    df.at[idx, "_website_confidence"] = "excluded"
+                    df.at[idx, "_website_source"] = f"manual: excluded ({reason.value})"
+                    df.at[idx, "_website_needs_review"] = False
+                    df.at[idx, "_website_origin"] = "manual_excluded"
+                    df.at[idx, "_excluded_reason"] = reason.value
+                    df.at[idx, "_excluded_reason_note"] = ""
+                    df.at[idx, "_excluded_at"] = timestamp
+                    progress.mark_excluded()
+                    _save_csv_atomic(df, input_path)
+                    print_success(f"Excluded: {label}")
+                else:
+                    print_skip("Cancelled — skipped")
+                    progress.mark_skipped()
+                break
+
+            # ── Other (free text) ────────────────────────────────────────────
+            if key == "o":
+                note = ask_text("Reason (required)")
+                if not note:
+                    print_warning("Reason is required for OTHER — skipped.")
+                    progress.mark_skipped()
+                    break
+                if confirm(f"Exclude '{name}' — Other: {note}?"):
+                    timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+                    df.at[idx, "_website_url"] = ""
+                    df.at[idx, "_website_confidence"] = "excluded"
+                    df.at[idx, "_website_source"] = (
+                        f"manual: excluded ({ExcludeReason.OTHER.value})"
+                    )
+                    df.at[idx, "_website_needs_review"] = False
+                    df.at[idx, "_website_origin"] = "manual_excluded"
+                    df.at[idx, "_excluded_reason"] = ExcludeReason.OTHER.value
+                    df.at[idx, "_excluded_reason_note"] = note
+                    df.at[idx, "_excluded_at"] = timestamp
+                    progress.mark_excluded()
+                    _save_csv_atomic(df, input_path)
+                    print_success(f"Excluded (Other): {note}")
+                else:
+                    print_skip("Cancelled — skipped")
+                    progress.mark_skipped()
+                break
+
+        if quit_requested:
+            break
 
     # ── Final summary ────────────────────────────────────────────────────
     remaining_mask = (
@@ -618,7 +673,7 @@ def review_websites() -> None:
 
     clear()
     print_summary(
-        "Website Review Complete",
+        "Website Review Paused" if quit_requested else "Website Review Complete",
         [
             ("Accepted proposed", accepted_proposed),
             ("Accepted LLM", accepted_llm),

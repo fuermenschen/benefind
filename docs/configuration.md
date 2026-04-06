@@ -24,6 +24,7 @@ Location filtering settings are in `settings.toml` under `[filtering]`:
 Search settings are in `settings.toml` under `[search]`:
 
 - `provider` (currently `brave`)
+- `review_search_engine` (search engine for the website-review web-search shortcut: `duckduckgo` or `google`)
 - `max_results` (results per request; default `10`)
 - `fallback_score_threshold` (run second query when first-pass score is too low)
 - `fallback_min_score_gap` (run second query when top-vs-runner-up gap is too small)

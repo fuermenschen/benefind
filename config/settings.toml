@@ -52,6 +52,10 @@ respect_robots_txt = true
 # Search provider: "brave"
 provider = "brave"
 
+# Search engine used by the website-review shortcut (`benefind review websites`)
+# Supported: "duckduckgo", "google"
+review_search_engine = "google"
+
 # Number of search results to consider
 max_results = 10
 

@@ -51,6 +51,7 @@ class ScrapingConfig:
 @dataclass
 class SearchConfig:
     provider: str = "brave"
+    review_search_engine: str = "duckduckgo"
     max_results: int = 10
     min_results_before_broad_search: int = 3
     fallback_score_threshold: int = 25

@@ -123,6 +123,7 @@ Website review wizard actions:
 - accept proposed URL (keeps `_website_origin=automatic`)
 - accept LLM alternative URL (`_website_origin=manual_llm`)
 - enter a different URL (`_website_origin=manual`)
+- open a browser search for `<organization name> <organization location>` via `f` (engine configured via `search.review_search_engine`)
 - mark "no website exists" (quick-access exclusion with `NO_INFORMATION`, `_website_origin=manual_excluded`)
 - exclude organization from downstream pipeline with predefined reason codes (`NO_INFORMATION`, `IN_LIQUIDATION`, `NOT_EXIST`, `IRRELEVANT_PURPOSE`, `OTHER`) and required note for `OTHER` (`_website_origin=manual_excluded`)
 - skip or quit
