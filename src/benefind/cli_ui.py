@@ -12,6 +12,7 @@ Design principles:
 
 from __future__ import annotations
 
+import select
 import sys
 import termios
 import tty
@@ -220,15 +221,20 @@ def fmt_confidence(conf: str | None) -> str:
 
 
 def _getch() -> str:
-    """Read a single character from stdin without waiting for Enter."""
+    """Read one keypress burst from stdin without waiting for Enter."""
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        ch = sys.stdin.read(1)
+        chars = [sys.stdin.read(1)]
+        while True:
+            readable, _, _ = select.select([sys.stdin], [], [], 0)
+            if not readable:
+                break
+            chars.append(sys.stdin.read(1))
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
-    return ch
+    return "".join(chars)
 
 
 def wait_for_key(
@@ -251,9 +257,17 @@ def wait_for_key(
         console.print(f"\n[{C_SECONDARY}]{prompt}[/{C_SECONDARY}]", end="")
     while True:
         ch = _getch()
+        if len(ch) > 1 and not ch.startswith("\x1b"):
+            first = ch[0].lower()
+            if first in valid_lower:
+                console.print(f"[bold]{ch[0]}[/bold]")
+                print_warning("Ignored extra buffered input; used first key only.")
+                return first
+            print_warning("Pasted text ignored in hotkey mode. Press one key.")
+            continue
         if ch == "\x03":  # Ctrl-C
             raise KeyboardInterrupt
-        if ch == "\x1b":  # Escape – treat as cancel/skip
+        if ch.startswith("\x1b"):  # Escape (and escape sequences) -> cancel/skip
             console.print()  # newline after prompt
             return "esc"
         key = ch.lower()

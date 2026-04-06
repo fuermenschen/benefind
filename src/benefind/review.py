@@ -559,7 +559,7 @@ def review_websites() -> None:
 
             # ── Enter different URL ──────────────────────────────────────────
             if key == "e":
-                url = ask_text("Website URL", default=current_url)
+                url = ask_text("Website URL")
                 if not url:
                     print_skip("Empty URL — skipped.")
                     progress.mark_skipped()
