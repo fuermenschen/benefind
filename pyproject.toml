@@ -1,7 +1,7 @@
 [project]
 name = "benefind"
 version = "0.1.0"
-description = "AI-assisted screening of tax-exempt nonprofits for charity partnership matching"
+description = "Precision-first nonprofit screening with explainable, reproducible decisions and selective LLM assistance"
 license = "GPL-3.0-only"
 requires-python = ">=3.12"
 dependencies = [

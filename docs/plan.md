@@ -9,8 +9,8 @@ in Winterthur.
 
 The tool processes the official Kanton Zürich list of tax-exempt organizations
 (gemeinnützig & öffentlich), filters it to the Bezirk Winterthur region, and then
-uses AI-assisted web research to evaluate each organization against configurable
-criteria.
+combines deterministic web research (search, ranking, scraping) with selective LLM
+evaluation to assess each organization against configurable criteria.
 
 ### Design Principles
 

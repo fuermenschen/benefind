@@ -73,7 +73,7 @@ def step_filter(settings):
     matched, review, excluded = filter_organizations(input_path, settings)
     paths = save_filtered(matched, review, excluded)
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"  Matched:      {len(matched)} organizations")
     print(f"  Need review:  {len(review)} organizations")
     print(f"  Excluded:     {len(excluded)} organizations")
@@ -87,9 +87,9 @@ def step_filter(settings):
 
 def step_discover(settings):
     """Step 3a: Find websites."""
-    from benefind.discover_websites import find_websites_batch
-
     import pandas as pd
+
+    from benefind.discover_websites import find_websites_batch
 
     print("\n" + "=" * 60)
     print("STEP 3a: Discover websites")
@@ -123,9 +123,9 @@ def step_discover(settings):
 
 def step_scrape(settings):
     """Step 3b: Scrape websites."""
-    from benefind.scrape import scrape_organization
-
     import pandas as pd
+
+    from benefind.scrape import scrape_organization
 
     print("\n" + "=" * 60)
     print("STEP 3b: Scrape websites")
@@ -152,9 +152,9 @@ def step_scrape(settings):
 
 def step_evaluate(settings):
     """Step 3c: LLM evaluation."""
-    from benefind.evaluate import evaluate_batch
-
     import pandas as pd
+
+    from benefind.evaluate import evaluate_batch
 
     print("\n" + "=" * 60)
     print("STEP 3c: Evaluate organizations with LLM")

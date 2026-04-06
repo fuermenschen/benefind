@@ -34,7 +34,10 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 app = typer.Typer(
     name="benefind",
-    help="AI-assisted screening of tax-exempt nonprofits for charity partnership matching.",
+    help=(
+        "Precision-first nonprofit screening with explainable, reproducible decisions "
+        "and selective LLM assistance."
+    ),
     no_args_is_help=True,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
