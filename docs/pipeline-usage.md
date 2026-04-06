@@ -151,3 +151,26 @@ Legacy script (still supported):
 uv run python scripts/review_flagged.py locations
 uv run python scripts/review_flagged.py websites
 ```
+
+## Export intermediate results
+
+Export supports a wizard flow with target selection and folder picker:
+
+```bash
+uv run benefind export
+```
+
+Wizard highlights:
+
+- multi-select export targets with live size/file-count hints
+- supports full `data/orgs/` export as one option (no per-file listing)
+- opens native folder picker (Finder on macOS), with terminal path fallback
+- exported names follow `export_YYMMDD-hhMMSS_<file_name>`
+
+Non-interactive export for scripts/automation:
+
+```bash
+uv run benefind export --no-interaction --destination "/tmp/benefind-exports"
+uv run benefind export --no-interaction --destination "/tmp/benefind-exports" --only filtered,orgs
+uv run benefind export --no-interaction --destination "/tmp/benefind-exports" --except raw
+```

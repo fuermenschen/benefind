@@ -19,6 +19,8 @@ from dotenv import load_dotenv
 from rich.logging import RichHandler
 
 from benefind.cli_ui import (
+    ask_checkbox,
+    ask_text,
     confirm,
     console,
     make_panel,
@@ -80,6 +82,99 @@ def _detect_first_column(columns: list[str], candidates: list[str], default: str
 
 def _parse_target_list(value: str) -> set[str]:
     return {item.strip().lower() for item in value.split(",") if item.strip()}
+
+
+def _format_bytes(num_bytes: int) -> str:
+    size = float(num_bytes)
+    units = ["B", "KB", "MB", "GB", "TB"]
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+
+
+def _iter_export_files(directory: Path):
+    if not directory.exists():
+        return
+    for path in sorted(directory.rglob("*")):
+        if not path.is_file() or path.name == ".gitkeep":
+            continue
+        yield path
+
+
+def _export_target_dirs(data_dir: Path) -> dict[str, Path]:
+    return {
+        "raw": data_dir / "raw",
+        "parsed": data_dir / "parsed",
+        "filtered": data_dir / "filtered",
+        "orgs": data_dir / "orgs",
+        "reports": data_dir / "reports",
+    }
+
+
+def _collect_export_target_stats(data_dir: Path) -> dict[str, dict[str, int | Path]]:
+    stats: dict[str, dict[str, int | Path]] = {}
+    for target, directory in _export_target_dirs(data_dir).items():
+        file_count = 0
+        total_bytes = 0
+        for file_path in _iter_export_files(directory):
+            file_count += 1
+            total_bytes += file_path.stat().st_size
+        if file_count > 0:
+            stats[target] = {
+                "path": directory,
+                "files": file_count,
+                "bytes": total_bytes,
+            }
+    return stats
+
+
+def _target_label(target: str) -> str:
+    labels = {
+        "raw": "raw",
+        "parsed": "parsed",
+        "filtered": "filtered",
+        "orgs": "orgs (full directory)",
+        "reports": "reports",
+    }
+    return labels.get(target, target)
+
+
+def _open_directory_picker() -> Path | None:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        selected = filedialog.askdirectory(title="Choose export destination")
+        root.destroy()
+    except Exception:
+        return None
+
+    if not selected:
+        return None
+    return Path(selected)
+
+
+def _unique_export_path(destination: Path, name: str) -> Path:
+    candidate = destination / name
+    if not candidate.exists():
+        return candidate
+
+    path_name = Path(name)
+    stem = path_name.stem
+    suffix = path_name.suffix
+    index = 2
+    while True:
+        numbered_name = f"{stem}_{index}{suffix}" if suffix else f"{name}_{index}"
+        numbered_candidate = destination / numbered_name
+        if not numbered_candidate.exists():
+            return numbered_candidate
+        index += 1
 
 
 def _clear_directory(directory: Path, keep_pdf: bool = False) -> tuple[int, int]:
@@ -1094,6 +1189,168 @@ def extend(
         [
             ("Rows", f"{current_size} → {len(extended_df)} (added {len(additions_df)}, {mode})"),
             ("Saved to", str(output_path)),
+        ],
+    )
+
+
+@app.command()
+def export(
+    destination: Path | None = typer.Option(
+        None,
+        "--destination",
+        "-o",
+        help="Destination folder for exported files",
+    ),
+    only: str | None = typer.Option(
+        None,
+        "--only",
+        help="Export only selected target(s): raw, parsed, filtered, orgs, reports",
+    ),
+    exclude: str | None = typer.Option(
+        None,
+        "--except",
+        help="Skip selected target(s): raw, parsed, filtered, orgs, reports",
+    ),
+    no_interaction: bool = typer.Option(
+        False,
+        "--no-interaction",
+        help="Disable wizard prompts and folder picker",
+    ),
+) -> None:
+    """Export intermediate pipeline results to a user-selected folder."""
+    from benefind.config import DATA_DIR
+
+    settings = load_settings()
+    _setup_logging(settings.log_level)
+
+    valid_targets = {"raw", "parsed", "filtered", "orgs", "reports"}
+    ordered_targets = ["raw", "parsed", "filtered", "orgs", "reports"]
+    interactive = (not no_interaction) and sys.stdin.isatty() and sys.stdout.isatty()
+
+    only_targets = _parse_target_list(only) if only else set()
+    exclude_targets = _parse_target_list(exclude) if exclude else set()
+
+    invalid_only = only_targets - valid_targets
+    invalid_exclude = exclude_targets - valid_targets
+    if invalid_only:
+        raise typer.BadParameter(f"Invalid --only target(s): {', '.join(sorted(invalid_only))}")
+    if invalid_exclude:
+        raise typer.BadParameter(
+            f"Invalid --except target(s): {', '.join(sorted(invalid_exclude))}"
+        )
+
+    requested_targets = only_targets if only_targets else set(valid_targets)
+    requested_targets -= exclude_targets
+
+    if not requested_targets:
+        console.print("[yellow]Nothing to export after applying --only/--except.[/yellow]")
+        return
+
+    available_stats = _collect_export_target_stats(DATA_DIR)
+    available_targets = set(available_stats)
+
+    missing_targets = requested_targets - available_targets
+    if missing_targets:
+        print_warning(
+            "No files found for target(s): "
+            + ", ".join(sorted(missing_targets))
+            + ". They will be skipped."
+        )
+
+    base_choices = [
+        target
+        for target in ordered_targets
+        if target in requested_targets and target in available_targets
+    ]
+    if not base_choices:
+        console.print("[yellow]No exportable files found for selected target(s).[/yellow]")
+        return
+
+    if interactive:
+        choice_rows: list[tuple[str, str]] = []
+        for target in base_choices:
+            file_count = int(available_stats[target]["files"])
+            total_bytes = int(available_stats[target]["bytes"])
+            label = (
+                f"{_target_label(target)} "
+                f"({_format_bytes(total_bytes)}, {file_count} file{'s' if file_count != 1 else ''})"
+            )
+            choice_rows.append((label, target))
+
+        selected_targets = ask_checkbox(
+            "Select what to export",
+            choice_rows,
+            default_values={"filtered"} & set(base_choices),
+        )
+        if not selected_targets:
+            console.print("[yellow]Export cancelled: no targets selected.[/yellow]")
+            return
+    else:
+        selected_targets = base_choices
+
+    if destination:
+        export_dir = destination.expanduser()
+    elif interactive:
+        export_dir = _open_directory_picker()
+        if export_dir is None:
+            typed_path = ask_text("Export destination folder")
+            if not typed_path:
+                console.print("[yellow]Export cancelled: no destination selected.[/yellow]")
+                return
+            export_dir = Path(typed_path).expanduser()
+    else:
+        raise typer.BadParameter("--destination is required when using --no-interaction.")
+
+    if export_dir.exists() and not export_dir.is_dir():
+        raise typer.BadParameter(f"Destination is not a directory: {export_dir}")
+
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now(UTC).strftime("%y%m%d-%H%M%S")
+    exported_paths: list[Path] = []
+    exported_files = 0
+    exported_bytes = 0
+
+    target_dirs = _export_target_dirs(DATA_DIR)
+
+    for target in selected_targets:
+        source_dir = target_dirs[target]
+
+        if target == "orgs":
+            destination_name = f"export_{timestamp}_orgs"
+            destination_path = _unique_export_path(export_dir, destination_name)
+            shutil.copytree(
+                source_dir,
+                destination_path,
+                ignore=shutil.ignore_patterns(".gitkeep"),
+            )
+            exported_paths.append(destination_path)
+            exported_files += int(available_stats[target]["files"])
+            exported_bytes += int(available_stats[target]["bytes"])
+            continue
+
+        for source_file in _iter_export_files(source_dir):
+            destination_name = f"export_{timestamp}_{source_file.name}"
+            destination_path = _unique_export_path(export_dir, destination_name)
+            shutil.copy2(source_file, destination_path)
+            exported_paths.append(destination_path)
+            exported_files += 1
+            exported_bytes += source_file.stat().st_size
+
+    preview_limit = 8
+    exported_names = [path.name for path in exported_paths[:preview_limit]]
+    if len(exported_paths) > preview_limit:
+        exported_names.append(f"... (+{len(exported_paths) - preview_limit} more)")
+    exported_names_label = "\n".join(exported_names)
+
+    print_summary(
+        "Export Complete",
+        [
+            ("Destination", str(export_dir)),
+            ("Targets", ", ".join(selected_targets)),
+            ("Exported files", exported_files),
+            ("Total size", _format_bytes(exported_bytes)),
+            ("Created", exported_names_label),
         ],
     )
 

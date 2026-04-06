@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import questionary
+from questionary import Choice
 from questionary import Style as QStyle
 from rich.columns import Columns
 from rich.console import Console
@@ -301,6 +302,27 @@ def ask_text(message: str, *, default: str = "") -> str:
         qmark="",
     ).ask()
     return (result or "").strip()
+
+
+def ask_checkbox(
+    message: str,
+    choices: list[tuple[str, str]],
+    *,
+    default_values: set[str] | None = None,
+) -> list[str]:
+    """Prompt for multi-select values via questionary checkbox."""
+    default_values = default_values or set()
+    questionary_choices = [
+        Choice(title=title, value=value, checked=value in default_values)
+        for title, value in choices
+    ]
+    result = questionary.checkbox(
+        message,
+        choices=questionary_choices,
+        style=QUESTIONARY_STYLE,
+        qmark="",
+    ).ask()
+    return [str(value) for value in (result or [])]
 
 
 # ---------------------------------------------------------------------------
