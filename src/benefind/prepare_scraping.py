@@ -112,6 +112,97 @@ def _normalize_host(host: str) -> str:
     return host.lower().strip().split(":", 1)[0]
 
 
+def _toggle_www_netloc(netloc: str) -> str:
+    parsed = urlsplit(f"http://{netloc}")
+    host = (parsed.hostname or "").strip()
+    if not host:
+        return ""
+
+    if host.lower().startswith("www."):
+        toggled_host = host[4:]
+    else:
+        toggled_host = f"www.{host}"
+
+    if parsed.port is not None:
+        return f"{toggled_host}:{parsed.port}"
+    return toggled_host
+
+
+def _build_seed_probe_candidates(seed_url: str) -> list[str]:
+    normalized = _normalize_url(seed_url)
+    if not normalized:
+        return []
+
+    parsed = urlsplit(normalized)
+    host = parsed.netloc
+    path = parsed.path or "/"
+
+    candidates: list[str] = []
+    for scheme in (parsed.scheme.lower(), "https", "http"):
+        if scheme not in {"https", "http"}:
+            continue
+        candidates.append(urlunsplit((scheme, host, path, "", "")))
+
+    toggled_netloc = _toggle_www_netloc(host)
+    if toggled_netloc:
+        for scheme in ("https", "http"):
+            candidates.append(urlunsplit((scheme, toggled_netloc, path, "", "")))
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized_candidate = _normalize_url(candidate)
+        if not normalized_candidate or normalized_candidate in seen:
+            continue
+        seen.add(normalized_candidate)
+        unique.append(normalized_candidate)
+    return unique
+
+
+def _probe_seed_candidate(
+    client: httpx.Client,
+    url: str,
+    timeout_seconds: int,
+) -> tuple[bool, str, str]:
+    try:
+        response = client.get(url, timeout=timeout_seconds)
+    except Exception as e:
+        return False, "", f"{type(e).__name__}: {e}"
+
+    final_url = _normalize_url(str(response.url))
+    status = int(response.status_code)
+    if status < 500:
+        return True, final_url, f"http_{status}"
+    return False, final_url, f"http_{status}"
+
+
+def _resolve_reachable_scope(
+    client: httpx.Client,
+    scope: ScopeDefinition,
+    timeout_seconds: int,
+) -> tuple[ScopeDefinition | None, str]:
+    candidates = _build_seed_probe_candidates(scope.seed_url)
+    if not candidates:
+        return None, "seed_unreachable:no_probe_candidates"
+
+    errors: list[str] = []
+    for candidate in candidates:
+        ok, final_url, status_note = _probe_seed_candidate(client, candidate, timeout_seconds)
+        if not ok:
+            errors.append(f"{candidate} ({status_note})")
+            continue
+
+        resolved_from = final_url or candidate
+        resolved_scope = _build_scope(resolved_from, scope.include_subdomains)
+        if resolved_scope is not None:
+            return resolved_scope, ""
+
+        errors.append(f"{candidate} (invalid_resolved_url)")
+
+    preview = "; ".join(errors[:3]) if errors else "all_probe_attempts_failed"
+    return None, f"seed_unreachable:{preview}"
+
+
 def _normalize_text(value: str) -> str:
     normalized = unquote_plus((value or "").lower().strip())
     return (
@@ -992,6 +1083,23 @@ def _prepare_single_org(
         headers={"User-Agent": settings.scraping.user_agent},
         follow_redirects=True,
     ) as client:
+        resolved_scope, seed_probe_error = _resolve_reachable_scope(client, scope, timeout)
+        if resolved_scope is None:
+            summary = _make_prepare_summary(
+                org_id=org_id,
+                org_name=org_name,
+                website_url=website_url,
+                prepared_at=prepared_at,
+                scope=scope,
+                robots_policy="unknown",
+                robots_fetch="seed_unreachable",
+                allowed=True,
+                prep_status="no_urls",
+                prep_error=seed_probe_error,
+            )
+            return summary, []
+
+        scope = resolved_scope
         robots_parser: RobotExclusionRulesParser | None = None
         robots_fetch = "not_checked"
         robots_policy = "allowed"

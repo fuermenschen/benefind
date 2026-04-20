@@ -149,6 +149,8 @@ Every website decision is persisted immediately.
 `benefind prepare-scraping` behavior highlights:
 
 - derives robots policy status per organization website (`allowed`, `blocked`, `unknown`)
+- probes the seed URL with scheme/www fallbacks before robots/sitemap discovery and adopts
+  the first reachable redirected site base (prevents silent one-URL failures on moved domains)
 - normalizes the discovered website URL into the most plausible crawl base before scoping:
   - host scope for root-like seeds
   - language-root scope for leaf pages like `/de/kontakt`
