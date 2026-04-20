@@ -3,6 +3,10 @@
 ```text
 benefind/
 ├── config/                  # Configuration files
+│   ├── settings.toml
+│   ├── url_scoring.toml
+│   ├── municipalities.toml
+│   └── prompts.toml
 ├── data/                    # All intermediate and output data (gitignored)
 │   ├── raw/                 # Downloaded PDF
 │   ├── parsed/              # Extracted CSV
@@ -12,6 +16,7 @@ benefind/
 ├── docs/                    # Project docs
 ├── scripts/
 │   ├── run_pipeline.py      # Full pipeline orchestrator
+│   ├── check_normalization.py # URL normalization audit helper
 │   └── review_flagged.py    # Manual review helper
 └── src/benefind/            # Source code
     ├── cli.py               # CLI entry point
@@ -31,3 +36,4 @@ Common generated files in `data/filtered/`:
 - `organizations_matched.csv.all` (full matched set parked by `benefind subset` safe mode)
 - `organizations_with_websites.csv`
 - `location_review_decisions.csv`
+- `organizations_scrape_prep.csv`

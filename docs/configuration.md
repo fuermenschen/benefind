@@ -5,6 +5,7 @@ All configuration lives in `config/`.
 - `settings.toml`: general settings (thresholds, delays, model choice)
 - `municipalities.toml`: list of municipalities in Bezirk Winterthur
 - `prompts.toml`: LLM prompt templates for organization evaluation
+- `url_scoring.toml`: lexical URL ranking/exclusion rules for `prepare-scraping`
 
 For local machine overrides, create:
 
@@ -75,3 +76,23 @@ Website provenance values:
 - `_website_origin=manual_llm` (user accepted LLM-proposed alternative URL)
 - `_website_origin=manual` (user-entered URL)
 - `_website_origin=manual_excluded` (excluded from downstream pipeline with reason; includes "no website exists" quick-access)
+
+Scraping settings are in `settings.toml` under `[scraping]`:
+
+- `prepare_include_subdomains` (allow/disallow subdomains during in-scope URL filtering)
+- `prepare_keep_ranked_urls_per_org` (how many top-ranked URLs are kept per organization)
+- `prepare_discovery_safety_cap` (hard cap on discovered candidates before ranking)
+- `prepare_stale_sitemap_days` (sitemap freshness threshold to trigger fallback discovery)
+- `prepare_section_cap_per_org` (soft cap per lexical section/category before final ranking cap)
+- `prepare_sitemap_max_files` / `prepare_sitemap_max_depth` (sitemap traversal bounds)
+- `prepare_fallback_max_visits` (max pages visited during local-link fallback)
+- `prepare_max_workers` (concurrent organization workers for `prepare-scraping`)
+
+URL normalization workflow settings:
+
+- `benefind normalize-urls` builds normalization suggestions and mandatory review queue columns
+  in `data/filtered/organizations_with_websites.csv`.
+- `benefind review-url-normalization` writes decisions (including `_website_url_final`) back to the
+  same CSV.
+- `benefind prepare-scraping` requires `_website_url_final` and blocks if unresolved mandatory
+  normalization reviews remain (excluded rows are ignored).

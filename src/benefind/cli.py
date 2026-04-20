@@ -12,11 +12,24 @@ import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pandas as pd
 import typer
 from dotenv import load_dotenv
+from rich.console import Group
+from rich.live import Live
 from rich.logging import RichHandler
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+from rich.table import Table
 
 from benefind.cli_ui import (
     ask_checkbox,
@@ -29,7 +42,7 @@ from benefind.cli_ui import (
     print_warning,
 )
 from benefind.config import PROJECT_ROOT, load_settings
-from benefind.exclusion_reasons import has_exclusion_reason_series
+from benefind.exclusion_reasons import has_exclusion_reason, has_exclusion_reason_series
 
 # Load .env file from project root before anything else
 load_dotenv(PROJECT_ROOT / ".env")
@@ -82,6 +95,47 @@ def _detect_first_column(columns: list[str], candidates: list[str], default: str
 
 def _parse_target_list(value: str) -> set[str]:
     return {item.strip().lower() for item in value.split(",") if item.strip()}
+
+
+def _is_truthy_text(value: object) -> bool:
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "y"}
+
+
+def _text_or_empty(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    return str(value or "").strip()
+
+
+def _is_trailing_slash_only_difference(original: str, normalized: str) -> bool:
+    original_text = str(original or "").strip()
+    normalized_text = str(normalized or "").strip()
+    if not original_text or not normalized_text:
+        return False
+    if original_text == normalized_text:
+        return False
+
+    original_parts = urlsplit(original_text)
+    normalized_parts = urlsplit(normalized_text)
+
+    if (
+        original_parts.scheme.lower() != normalized_parts.scheme.lower()
+        or original_parts.netloc.lower() != normalized_parts.netloc.lower()
+        or original_parts.query != normalized_parts.query
+        or original_parts.fragment != normalized_parts.fragment
+    ):
+        return False
+
+    original_path = original_parts.path or "/"
+    normalized_path = normalized_parts.path or "/"
+    return original_path.rstrip("/") == normalized_path.rstrip("/")
+
+
+def _has_material_url_change(original: str, normalized: str) -> bool:
+    return not _is_trailing_slash_only_difference(original, normalized) and (
+        str(original or "").strip() != str(normalized or "").strip()
+    )
 
 
 def _format_bytes(num_bytes: int) -> str:
@@ -209,6 +263,37 @@ def _delete_pdf_files(raw_dir: Path) -> int:
         pdf_file.unlink()
         deleted += 1
     return deleted
+
+
+def _render_prepare_scraping_live_view(
+    progress: Progress,
+    *,
+    mode: str,
+    workers: int,
+    pending: int,
+    skipped_existing: int,
+    ready_count: int,
+    blocked_count: int,
+    no_url_count: int,
+    other_count: int,
+) -> Group:
+    summary = Table(show_header=False, box=None, pad_edge=False)
+    summary.add_column("key", style="dim", no_wrap=True)
+    summary.add_column("value")
+    summary.add_row("Mode", mode)
+    summary.add_row("Workers", str(workers))
+    summary.add_row("Pending", str(pending))
+    summary.add_row("Skipped existing", str(skipped_existing))
+    completed_parts = [
+        f"[green]{ready_count} ready[/green]",
+        f"[red]{blocked_count} blocked[/red]",
+        f"[yellow]{no_url_count} no_urls[/yellow]",
+    ]
+    if other_count > 0:
+        completed_parts.append(f"[dim]{other_count} other[/dim]")
+    summary.add_row("Completed", "  ".join(completed_parts))
+
+    return Group(make_panel(summary, "Prepare Scraping Run"), progress)
 
 
 @app.command()
@@ -818,11 +903,12 @@ def prepare_scraping(
         help="Optional override for concurrent organization prep workers.",
     ),
 ) -> None:
-    """Step 3b: Prepare scraping scope and URL targets.
+    """Step 3c: Prepare scraping scope and URL targets.
 
     Derives robots policy + scope per organization website and writes
     checkpointed prep artifacts: one global summary CSV plus one per-org
-    prepared URL CSV (no content filtering).
+    ranked prepared URL CSV with score/reason metadata. URLs with identical
+    host+path are deduplicated across schemes, preferring HTTPS.
     """
     import pandas as pd
 
@@ -855,9 +941,40 @@ def prepare_scraping(
     if "_website_url" not in df.columns:
         raise typer.BadParameter("Input CSV has no _website_url column. Run discover first.")
 
+    normalized_col = "_website_url_final"
+    review_needed_col = "_website_url_review_needed"
+    if normalized_col not in df.columns:
+        raise typer.BadParameter(
+            "Input CSV has no _website_url_final column. Run normalize-urls first."
+        )
+
+    if "_excluded_reason" in df.columns:
+        excluded_mask = has_exclusion_reason_series(df["_excluded_reason"])
+    else:
+        excluded_mask = pd.Series(False, index=df.index)
+
+    unresolved_mask = (
+        (
+            df[review_needed_col].apply(_is_truthy_text)
+            if review_needed_col in df.columns
+            else pd.Series(False, index=df.index)
+        )
+        & (df[normalized_col].fillna("").astype(str).str.strip() == "")
+        & ~excluded_mask
+    )
+    unresolved_count = int(unresolved_mask.sum())
+    if unresolved_count > 0:
+        raise typer.BadParameter(
+            "Normalization review is incomplete: "
+            f"{unresolved_count} rows still need a final URL. "
+            "Run benefind review-url-normalization first."
+        )
+
     if "_excluded_reason" not in df.columns:
         df["_excluded_reason"] = ""
-    excluded_mask = has_exclusion_reason_series(df["_excluded_reason"])
+        excluded_mask = pd.Series(False, index=df.index)
+    else:
+        excluded_mask = has_exclusion_reason_series(df["_excluded_reason"])
     active_df = df[~excluded_mask].copy()
     if active_df.empty:
         console.print("[yellow]No active organizations available. Nothing to prepare.[/yellow]")
@@ -893,6 +1010,8 @@ def prepare_scraping(
         skipped_existing = len(active_df) - len(working_df)
 
     if debug_sample:
+        import random
+
         sample_mode = "debug_sample"
         if debug_org_id:
             selected = active_df[
@@ -905,7 +1024,9 @@ def prepare_scraping(
             working_df = selected.head(1)
             effective_seed = "-"
         else:
-            effective_seed = debug_seed if debug_seed is not None else subset_seed
+            effective_seed = (
+                debug_seed if debug_seed is not None else random.SystemRandom().randrange(1, 10**9)
+            )
             working_df = active_df.sample(n=1, random_state=effective_seed)
     elif subset:
         sample_mode = "subset"
@@ -924,11 +1045,27 @@ def prepare_scraping(
         )
         return
 
-    console.print(f"Preparing scraping targets for {len(working_df)} organizations...")
+    print_summary(
+        "Prepare Scraping Plan",
+        [
+            ("Input CSV", str(input_path)),
+            ("Organizations to process", len(working_df)),
+            ("Skipped existing", skipped_existing),
+            ("Mode", sample_mode),
+            ("Sampling seed", effective_seed if sample_mode in {"subset", "debug_sample"} else "-"),
+            ("Workers", int(settings.scraping.prepare_max_workers)),
+            ("Keep ranked URLs/org", int(settings.scraping.prepare_keep_ranked_urls_per_org)),
+            ("Discovery safety cap", int(settings.scraping.prepare_discovery_safety_cap)),
+            ("Summary CSV", str(summary_path)),
+        ],
+    )
+
     writer = None
     debug_targets: list[dict] = []
     if not debug_sample:
         writer = PrepareCheckpointWriter(summary_path, existing_rows=existing_rows)
+
+    working_records = working_df.to_dict("records")
 
     def on_result(summary: dict, targets: list[dict]) -> None:
         if writer is not None:
@@ -936,14 +1073,82 @@ def prepare_scraping(
             return
         debug_targets.extend(targets)
 
-    summaries = prepare_scraping_batch(
-        working_df.to_dict("records"),
-        settings,
-        org_id_column="_org_id",
-        name_column=name_column,
-        website_column="_website_url",
-        on_result=on_result,
-    )
+    if debug_sample:
+        summaries = prepare_scraping_batch(
+            working_records,
+            settings,
+            org_id_column="_org_id",
+            name_column=name_column,
+            website_column=normalized_col,
+            on_result=on_result,
+        )
+    else:
+        counts = {"ready": 0, "blocked": 0, "no_urls": 0, "other": 0}
+
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+            expand=True,
+        )
+        overall_task = progress.add_task("Organizations", total=len(working_records))
+
+        def build_live_view() -> Group:
+            progress_task = progress.tasks[overall_task]
+            total = int(progress_task.total or 0)
+            pending = max(0, total - int(progress_task.completed))
+            return _render_prepare_scraping_live_view(
+                progress,
+                mode=sample_mode,
+                workers=int(settings.scraping.prepare_max_workers),
+                pending=pending,
+                skipped_existing=skipped_existing,
+                ready_count=counts["ready"],
+                blocked_count=counts["blocked"],
+                no_url_count=counts["no_urls"],
+                other_count=counts["other"],
+            )
+
+        def on_started(org: dict) -> None:
+            live.update(build_live_view())
+
+        def on_result_live(summary: dict, targets: list[dict]) -> None:
+            on_result(summary, targets)
+
+            status = str(summary.get("_scrape_prep_status", "") or "unknown").strip()
+            if status == "ready":
+                counts["ready"] += 1
+            elif status == "blocked":
+                counts["blocked"] += 1
+            elif status == "no_urls":
+                counts["no_urls"] += 1
+            else:
+                counts["other"] += 1
+
+            progress.advance(overall_task)
+            live.update(build_live_view())
+
+        try:
+            with Live(build_live_view(), console=console, refresh_per_second=4) as live:
+                summaries = prepare_scraping_batch(
+                    working_records,
+                    settings,
+                    org_id_column="_org_id",
+                    name_column=name_column,
+                    website_column=normalized_col,
+                    on_started=on_started,
+                    on_result=on_result_live,
+                    log_progress=False,
+                )
+        except KeyboardInterrupt:
+            print_warning(
+                "Prepare scraping stopped early. Finished organizations were checkpointed."
+            )
+            return
 
     if debug_sample:
         summary_df = pd.DataFrame(summaries)
@@ -956,6 +1161,9 @@ def prepare_scraping(
             status = str(row.get("_scrape_prep_status", ""))
             robots = str(row.get("_scrape_robots_policy", ""))
             scope_mode = str(row.get("_scrape_scope_mode", ""))
+            scope_reason = str(row.get("_scrape_scope_reason", ""))
+            seed_original = str(row.get("_scrape_seed_original", ""))
+            seed_normalized = str(row.get("_scrape_seed_normalized", ""))
             console.print(
                 make_panel(
                     f"[bold]{org_name}[/bold]\n"
@@ -963,13 +1171,25 @@ def prepare_scraping(
                     f"status: {status}\n"
                     f"robots: {robots}\n"
                     f"scope: {scope_mode}\n"
+                    f"scope reason: {scope_reason or '-'}\n"
+                    f"seed original: {seed_original or '-'}\n"
+                    f"seed normalized: {seed_normalized or '-'}\n"
+                    f"candidate urls: {int(row.get('_scrape_prepared_candidate_count', 0))}\n"
+                    f"excluded urls: {int(row.get('_scrape_prepared_excluded_count', 0))}\n"
                     f"prepared urls: {int(row.get('_scrape_prepared_url_count', 0))}",
                     "Prepare Scraping Debug Sample",
                 )
             )
         if not targets_df.empty:
             preview_df = targets_df[
-                ["_prepared_url_order", "_prepared_url_source", "_prepared_url"]
+                [
+                    "_prepared_url_order",
+                    "_prepared_url_score",
+                    "_prepared_url_source",
+                    "_prepared_url_decision",
+                    "_prepared_url_reasons",
+                    "_prepared_url",
+                ]
             ].head(15)
             console.print(preview_df.to_string(index=False))
         return
@@ -1149,6 +1369,552 @@ def scrape(
             ("Skipped excluded", skipped_excluded),
         ],
     )
+
+
+@app.command()
+def normalize_urls(
+    input_file: Path | None = typer.Option(
+        None,
+        "--input",
+        "-i",
+        help="Path to input CSV (default: filtered/organizations_with_websites.csv)",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Path to output CSV (default: overwrite input CSV in place)",
+    ),
+    column: str = typer.Option(
+        "_website_url",
+        "--column",
+        "-c",
+        help="Column containing URLs to normalize",
+    ),
+    include_subdomains: bool | None = typer.Option(
+        None,
+        "--include-subdomains/--no-include-subdomains",
+        help=(
+            "Override scope normalization setting. Default uses scraping.prepare_include_subdomains"
+        ),
+    ),
+) -> None:
+    """Normalize discovered URLs and build a mandatory review queue for non-root paths."""
+    import pandas as pd
+
+    from benefind.config import DATA_DIR
+    from benefind.prepare_scraping import _build_scope, _normalize_url
+
+    settings = load_settings()
+    _setup_logging(settings.log_level)
+
+    input_path = input_file or (DATA_DIR / "filtered" / "organizations_with_websites.csv")
+    if not input_path.exists():
+        print_error(f"Input file not found: {input_path}")
+        raise typer.Exit(code=1)
+
+    output_path = output_file or input_path
+
+    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    if df.empty:
+        console.print("[yellow]Input CSV is empty. Nothing to normalize.[/yellow]")
+        return
+    if column not in df.columns:
+        raise typer.BadParameter(f"Input CSV has no '{column}' column.")
+
+    effective_include_subdomains = (
+        settings.scraping.prepare_include_subdomains
+        if include_subdomains is None
+        else include_subdomains
+    )
+
+    original_col = f"{column}_original"
+    basic_col = f"{column}_basic_normalized"
+    normalized_col = f"{column}_normalized"
+    changed_col = f"{column}_changed"
+    reason_col = f"{column}_normalization_reason"
+    scope_mode_col = f"{column}_scope_mode"
+    scope_prefix_col = f"{column}_scope_path_prefix"
+    unchanged_indicator_col = f"{column}_unchanged_indicator"
+    review_needed_col = f"{column}_review_needed"
+    canonical_review_needed_col = "_website_url_review_needed"
+
+    confidence_col = "_website_url_norm_confidence"
+    guidance_col = "_website_url_norm_guidance"
+    decision_col = "_website_url_norm_decision"
+    final_col = "_website_url_final"
+    reviewed_at_col = "_website_url_norm_reviewed_at"
+    note_col = "_website_url_norm_note"
+
+    legacy_label_col = "_url_norm_label_should_change"
+    legacy_expected_col = "_url_norm_label_expected_url"
+
+    def path_depth(url: str) -> int:
+        parsed = urlsplit(str(url or "").strip())
+        segments = [segment for segment in (parsed.path or "/").split("/") if segment]
+        return len(segments)
+
+    def first_segment(url: str) -> str:
+        parsed = urlsplit(str(url or "").strip())
+        segments = [segment for segment in (parsed.path or "/").split("/") if segment]
+        return segments[0].lower() if segments else ""
+
+    def confidence_rank(label: str) -> int:
+        mapping = {"very_high": 4, "high": 3, "medium": 2, "low": 1, "none": 0}
+        return mapping.get(label, 0)
+
+    def suggest_confidence(
+        raw_url: str,
+        scope_reason: str,
+        normalized_url: str,
+        reason_stats: dict[str, tuple[int, int]],
+        segment_stats: dict[str, tuple[int, int]],
+    ) -> tuple[str, str]:
+        if not raw_url or not normalized_url:
+            return "none", "No valid website URL available"
+
+        depth = path_depth(raw_url)
+        if depth == 0:
+            return "very_high", "Already base URL (auto-resolved)"
+
+        segment = first_segment(raw_url)
+        confidence = "medium"
+        guidance = "Path URL requires manual confirmation"
+
+        high_segments = {
+            "de",
+            "en",
+            "fr",
+            "it",
+            "home",
+            "index.html",
+            "index.php",
+            "start",
+            "startseite",
+            "kontakt",
+            "kontakt.php",
+            "ueber-uns",
+            "about-us",
+            "impressum",
+        }
+
+        if scope_reason.startswith("scaffold_promoted_to_host_root"):
+            confidence = "high"
+            guidance = "Scaffold/language path likely not organization-specific"
+        elif scope_reason.startswith("promoted_to_host_root"):
+            confidence = "high"
+            guidance = "Single-segment path likely a leaf landing page"
+        elif scope_reason == "single_leaf_promoted_to_host_root":
+            confidence = "medium"
+            guidance = "Single-segment path often normalizes to host root"
+        elif scope_reason == "kept_path_prefix":
+            confidence = "low"
+            guidance = "Path-prefix scope retained; verify manually"
+
+        if segment in high_segments and confidence_rank(confidence) < confidence_rank("high"):
+            confidence = "high"
+            guidance = f"Segment '{segment}' usually normalizes to host root"
+
+        reason_yes, reason_total = reason_stats.get(scope_reason, (0, 0))
+        if reason_total >= 3:
+            reason_ratio = reason_yes / reason_total
+            if reason_ratio >= 0.9 and confidence_rank(confidence) < confidence_rank("high"):
+                confidence = "high"
+                guidance = (
+                    "Historical reviews: "
+                    f"{scope_reason} changed in {reason_yes}/{reason_total} cases"
+                )
+            elif reason_ratio <= 0.2:
+                confidence = "low"
+                guidance = (
+                    "Historical reviews: "
+                    f"{scope_reason} mostly kept original "
+                    f"({reason_yes}/{reason_total} changed)"
+                )
+
+        seg_yes, seg_total = segment_stats.get(segment, (0, 0))
+        if segment and seg_total >= 3:
+            seg_ratio = seg_yes / seg_total
+            if seg_ratio >= 0.9 and confidence_rank(confidence) < confidence_rank("high"):
+                confidence = "high"
+                guidance = (
+                    "Historical reviews: "
+                    f"'/{segment}' paths usually normalize ({seg_yes}/{seg_total})"
+                )
+            elif seg_ratio <= 0.2:
+                confidence = "low"
+                guidance = (
+                    "Historical reviews: "
+                    f"'/{segment}' paths are usually kept "
+                    f"({seg_yes}/{seg_total} changed)"
+                )
+
+        return confidence, guidance
+
+    reason_stats: dict[str, tuple[int, int]] = {}
+    segment_stats: dict[str, tuple[int, int]] = {}
+
+    historical_df = df.copy()
+    if legacy_label_col not in historical_df.columns:
+        historical_path = input_path.with_name(f"{input_path.stem}_url_normalized.csv")
+        if historical_path.exists():
+            historical_df = pd.read_csv(historical_path, encoding="utf-8-sig")
+
+    if {legacy_label_col, reason_col, column}.issubset(historical_df.columns):
+        labeled = historical_df.copy()
+        labeled[legacy_label_col] = labeled[legacy_label_col].astype(str).str.strip().str.lower()
+        labeled = labeled[labeled[legacy_label_col].isin({"yes", "no"})]
+
+        if not labeled.empty:
+            grouped_reason = labeled.groupby(reason_col)
+            reason_stats = {
+                str(key): (
+                    int((group[legacy_label_col] == "yes").sum()),
+                    int(len(group)),
+                )
+                for key, group in grouped_reason
+            }
+
+            labeled["_first_segment"] = labeled[column].map(first_segment)
+            grouped_segment = labeled.groupby("_first_segment")
+            segment_stats = {
+                str(key): (
+                    int((group[legacy_label_col] == "yes").sum()),
+                    int(len(group)),
+                )
+                for key, group in grouped_segment
+                if str(key)
+            }
+
+    legacy_by_org_id: dict[str, dict[str, str]] = {}
+    if {
+        "_org_id",
+        legacy_label_col,
+    }.issubset(historical_df.columns):
+        legacy_rows = historical_df.copy()
+        legacy_rows[legacy_label_col] = (
+            legacy_rows[legacy_label_col].astype(str).str.strip().str.lower()
+        )
+        legacy_rows = legacy_rows[legacy_rows[legacy_label_col].isin({"yes", "no"})]
+        for _, legacy_row in legacy_rows.iterrows():
+            org_id = str(legacy_row.get("_org_id", "") or "").strip()
+            if not org_id:
+                continue
+            legacy_by_org_id[org_id] = {
+                "label": str(legacy_row.get(legacy_label_col, "") or "").strip().lower(),
+                "original": _text_or_empty(legacy_row.get(column, "")),
+                "normalized": _text_or_empty(legacy_row.get(normalized_col, "")),
+                "expected": _text_or_empty(legacy_row.get(legacy_expected_col, "")),
+            }
+
+    def urls_equivalent(first: str, second: str) -> bool:
+        first_text = _text_or_empty(first)
+        second_text = _text_or_empty(second)
+        if not first_text or not second_text:
+            return False
+        first_normalized = _normalize_url(first_text)
+        second_normalized = _normalize_url(second_text)
+        if first_normalized and second_normalized:
+            return first_normalized == second_normalized
+        return first_text == second_text
+
+    originals: list[str] = []
+    basic_urls: list[str] = []
+    normalized_urls: list[str] = []
+    changed_values: list[bool] = []
+    reasons: list[str] = []
+    scope_modes: list[str] = []
+    scope_prefixes: list[str] = []
+    unchanged_indicators: list[str] = []
+    review_needed_values: list[bool] = []
+    confidence_values: list[str] = []
+    guidance_values: list[str] = []
+    auto_decisions = 0
+
+    for raw_value in df[column].tolist():
+        raw_url = str(raw_value or "").strip()
+        originals.append(raw_url)
+
+        if not raw_url:
+            basic_urls.append("")
+            normalized_urls.append("")
+            changed_values.append(False)
+            reasons.append("no_website")
+            scope_modes.append("")
+            scope_prefixes.append("")
+            unchanged_indicators.append("no_website")
+            review_needed_values.append(False)
+            confidence_values.append("none")
+            guidance_values.append("No website URL")
+            continue
+
+        basic_normalized = _normalize_url(raw_url)
+        basic_urls.append(basic_normalized)
+        if not basic_normalized:
+            normalized_urls.append("")
+            changed_values.append(False)
+            reasons.append("invalid_or_unsupported_url")
+            scope_modes.append("")
+            scope_prefixes.append("")
+            unchanged_indicators.append("invalid_or_unsupported_url")
+            review_needed_values.append(False)
+            confidence_values.append("none")
+            guidance_values.append("Invalid or unsupported URL")
+            continue
+
+        scope = _build_scope(raw_url, include_subdomains=bool(effective_include_subdomains))
+        if scope is None:
+            normalized_urls.append("")
+            changed_values.append(False)
+            reasons.append("invalid_or_unsupported_url")
+            scope_modes.append("")
+            scope_prefixes.append("")
+            unchanged_indicators.append("invalid_or_unsupported_url")
+            review_needed_values.append(False)
+            confidence_values.append("none")
+            guidance_values.append("Invalid or unsupported URL")
+            continue
+
+        normalized_urls.append(scope.seed_url)
+        changed = _has_material_url_change(raw_url, scope.seed_url)
+        changed_values.append(changed)
+        reasons.append(scope.scope_reason)
+        scope_modes.append(scope.scope_mode)
+        scope_prefixes.append(scope.path_prefix)
+
+        confidence, guidance = suggest_confidence(
+            raw_url,
+            scope.scope_reason,
+            scope.seed_url,
+            reason_stats,
+            segment_stats,
+        )
+        confidence_values.append(confidence)
+        guidance_values.append(guidance)
+
+        if path_depth(raw_url) > 0:
+            unchanged_indicators.append("path_requires_review")
+            review_needed_values.append(True)
+        elif changed:
+            unchanged_indicators.append("changed")
+            review_needed_values.append(False)
+            auto_decisions += 1
+        elif _is_trailing_slash_only_difference(raw_url, scope.seed_url):
+            unchanged_indicators.append("trailing_slash_only")
+            review_needed_values.append(False)
+            auto_decisions += 1
+        elif (
+            scope.scope_mode == "host"
+            and scope.path_prefix == "/"
+            and scope.scope_reason == "root_seed"
+        ):
+            unchanged_indicators.append("already_root_domain")
+            review_needed_values.append(False)
+            auto_decisions += 1
+        else:
+            unchanged_indicators.append("unchanged_non_root")
+            review_needed_values.append(False)
+            auto_decisions += 1
+
+    df[original_col] = originals
+    df[basic_col] = basic_urls
+    df[normalized_col] = normalized_urls
+    df[changed_col] = changed_values
+    df[reason_col] = reasons
+    df[scope_mode_col] = scope_modes
+    df[scope_prefix_col] = scope_prefixes
+    df[unchanged_indicator_col] = unchanged_indicators
+    df[review_needed_col] = review_needed_values
+    df[canonical_review_needed_col] = df[review_needed_col]
+    df[confidence_col] = confidence_values
+    df[guidance_col] = guidance_values
+
+    for optional_col in [decision_col, final_col, reviewed_at_col, note_col]:
+        if optional_col not in df.columns:
+            df[optional_col] = ""
+        df[optional_col] = df[optional_col].apply(_text_or_empty)
+
+    if "_excluded_reason" not in df.columns:
+        df["_excluded_reason"] = ""
+
+    pending_after_build = 0
+    migrated_from_legacy = 0
+    for idx in range(len(df)):
+        excluded = has_exclusion_reason(df.at[idx, "_excluded_reason"])
+        review_needed = _is_truthy_text(df.at[idx, review_needed_col])
+        raw_url = _text_or_empty(df.at[idx, column])
+        suggested_url = _text_or_empty(df.at[idx, normalized_col])
+        decision = _text_or_empty(df.at[idx, decision_col])
+        org_id = _text_or_empty(df.at[idx, "_org_id"]) if "_org_id" in df.columns else ""
+
+        if (not excluded) and decision == "excluded":
+            df.at[idx, decision_col] = ""
+            decision = ""
+
+        if excluded:
+            df.at[idx, review_needed_col] = False
+            df.at[idx, canonical_review_needed_col] = False
+            df.at[idx, final_col] = ""
+            if not decision:
+                df.at[idx, decision_col] = "excluded"
+            continue
+
+        if not review_needed:
+            if suggested_url:
+                df.at[idx, final_col] = suggested_url
+                if not decision:
+                    df.at[idx, decision_col] = "auto_resolved"
+            else:
+                df.at[idx, final_col] = raw_url
+                if raw_url and not decision:
+                    df.at[idx, decision_col] = "auto_keep_original"
+        else:
+            final_url = _text_or_empty(df.at[idx, final_col])
+            if (not final_url) and org_id and org_id in legacy_by_org_id:
+                legacy = legacy_by_org_id[org_id]
+                legacy_matches_current = (
+                    urls_equivalent(legacy["original"], raw_url)
+                    or urls_equivalent(legacy["normalized"], suggested_url)
+                    or urls_equivalent(legacy["expected"], suggested_url)
+                    or urls_equivalent(legacy["expected"], raw_url)
+                )
+
+                if legacy_matches_current and legacy["label"] == "yes":
+                    preferred_url = legacy["expected"] or suggested_url
+                    if preferred_url:
+                        df.at[idx, final_col] = preferred_url
+                        df.at[idx, decision_col] = (
+                            "use_normalized" if preferred_url == suggested_url else "custom_url"
+                        )
+                        migrated_from_legacy += 1
+                elif legacy_matches_current and legacy["label"] == "no" and raw_url:
+                    df.at[idx, final_col] = raw_url
+                    df.at[idx, decision_col] = "keep_original"
+                    migrated_from_legacy += 1
+
+                if _text_or_empty(df.at[idx, final_col]) and not _text_or_empty(
+                    df.at[idx, reviewed_at_col]
+                ):
+                    df.at[idx, reviewed_at_col] = datetime.now(UTC).isoformat(timespec="seconds")
+
+            final_url = _text_or_empty(df.at[idx, final_col])
+            if not final_url:
+                pending_after_build += 1
+
+    resolved_count = len(df) - pending_after_build
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    df.to_csv(temp_path, index=False, encoding="utf-8-sig")
+    temp_path.replace(output_path)
+
+    changed_count = int(df[changed_col].sum())
+    review_needed_count = int(df[review_needed_col].sum())
+    confidence_counts = df[confidence_col].astype(str).str.strip().value_counts().to_dict()
+
+    print_summary(
+        "URL Normalization Results",
+        [
+            ("Rows", len(df)),
+            ("Changed", changed_count),
+            ("Unchanged", len(df) - changed_count),
+            ("Needs review", review_needed_count),
+            ("Pending normalization review", pending_after_build),
+            ("Resolved", resolved_count),
+            ("Auto-resolved", auto_decisions),
+            ("Migrated from old review", migrated_from_legacy),
+            (
+                "Suggestion confidence high+",
+                int(confidence_counts.get("very_high", 0))
+                + int(confidence_counts.get("high", 0)),
+            ),
+            ("Saved to", str(output_path)),
+        ],
+    )
+
+
+@app.command()
+def normalize_urls_report(
+    input_file: Path = typer.Option(
+        ...,
+        "--input",
+        "-i",
+        help="Path to discovered websites CSV with normalization decisions",
+    ),
+    column: str = typer.Option(
+        "_website_url",
+        "--column",
+        "-c",
+        help="Base URL column name used in normalize-urls",
+    ),
+) -> None:
+    """Print URL normalization review queue and decision metrics."""
+    import pandas as pd
+
+    if not input_file.exists():
+        print_error(f"Input file not found: {input_file}")
+        raise typer.Exit(code=1)
+
+    df = pd.read_csv(input_file, encoding="utf-8-sig")
+    changed_col = f"{column}_changed"
+    reason_col = f"{column}_normalization_reason"
+    review_needed_col = f"{column}_review_needed"
+    confidence_col = "_website_url_norm_confidence"
+    decision_col = "_website_url_norm_decision"
+    final_col = "_website_url_final"
+
+    required = {changed_col, reason_col, review_needed_col, decision_col, final_col}
+    missing = [name for name in required if name not in df.columns]
+    if missing:
+        raise typer.BadParameter(
+            "Input CSV is missing required columns: " + ", ".join(sorted(missing))
+        )
+
+    if "_excluded_reason" in df.columns:
+        excluded_mask = has_exclusion_reason_series(df["_excluded_reason"])
+    else:
+        excluded_mask = pd.Series(False, index=df.index)
+
+    unresolved_mask = (
+        df[review_needed_col].apply(_is_truthy_text)
+        & (df[final_col].fillna("").astype(str).str.strip() == "")
+        & ~excluded_mask
+    )
+    decision_counts = df[decision_col].astype(str).str.strip().value_counts().to_dict()
+    confidence_counts = (
+        df[confidence_col].astype(str).str.strip().value_counts().to_dict()
+        if confidence_col in df.columns
+        else {}
+    )
+
+    print_summary(
+        "URL Normalization Queue Report",
+        [
+            ("Rows", len(df)),
+            ("Changed (heuristic)", int(df[changed_col].sum())),
+            ("Needs review", int(df[review_needed_col].apply(_is_truthy_text).sum())),
+            ("Pending review", int(unresolved_mask.sum())),
+            ("Use normalized", int(decision_counts.get("use_normalized", 0))),
+            ("Keep original", int(decision_counts.get("keep_original", 0))),
+            ("Custom URL", int(decision_counts.get("custom_url", 0))),
+            ("Excluded", int(decision_counts.get("excluded", 0))),
+        ],
+    )
+
+    top_reasons = df[reason_col].astype(str).str.strip().value_counts().head(8)
+    if not top_reasons.empty:
+        reason_lines = [f"{reason}: {count}" for reason, count in top_reasons.items() if reason]
+        if reason_lines:
+            console.print(make_panel("\n".join(reason_lines), "Top normalization reasons"))
+
+    if confidence_counts:
+        conf_lines = [
+            f"{label}: {count}"
+            for label, count in confidence_counts.items()
+            if label
+        ]
+        if conf_lines:
+            console.print(make_panel("\n".join(conf_lines), "Suggestion confidence distribution"))
 
 
 @app.command()
@@ -1770,10 +2536,12 @@ def delete_cmd(
 
 @app.command()
 def review(
-    what: str = typer.Argument(..., help="What to review: locations or websites"),
+    what: str = typer.Argument(
+        ..., help="What to review: locations, websites, or url-normalization"
+    ),
 ) -> None:
     """Review flagged items interactively and decide include/exclude."""
-    from benefind.review import review_locations, review_websites
+    from benefind.review import review_locations, review_url_normalization, review_websites
 
     settings = load_settings()
     _setup_logging(settings.log_level)
@@ -1783,8 +2551,51 @@ def review(
         review_locations()
     elif target == "websites":
         review_websites()
+    elif target in {"url-normalization", "url_normalization", "urlnorm", "url-norm"}:
+        review_url_normalization()
     else:
-        raise typer.BadParameter("Expected one of: locations, websites")
+        raise typer.BadParameter("Expected one of: locations, websites, url-normalization")
+
+
+@app.command(name="review-url-normalization")
+def review_url_normalization_cmd(
+    input_file: Path | None = typer.Option(
+        None,
+        "--input",
+        "-i",
+        help=(
+            "Path to discovered websites CSV "
+            "(default: filtered/organizations_with_websites.csv)"
+        ),
+    ),
+    column: str = typer.Option(
+        "_website_url",
+        "--column",
+        "-c",
+        help="Base URL column name used in normalize-urls",
+    ),
+    pending_only: bool = typer.Option(
+        True,
+        "--pending-only/--all",
+        help="Review only unlabeled rows or all rows in scope",
+    ),
+    include_no_review_needed: bool = typer.Option(
+        False,
+        "--include-no-review-needed",
+        help="Include rows flagged as no-review-needed",
+    ),
+) -> None:
+    """Guided review wizard for mandatory URL normalization decisions."""
+    from benefind.review import review_url_normalization
+
+    settings = load_settings()
+    _setup_logging(settings.log_level)
+    review_url_normalization(
+        input_file,
+        column=column,
+        pending_only=pending_only,
+        include_no_review_needed=include_no_review_needed,
+    )
 
 
 @app.command()

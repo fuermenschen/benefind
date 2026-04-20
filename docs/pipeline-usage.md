@@ -6,6 +6,8 @@
 uv run benefind parse
 uv run benefind filter
 uv run benefind discover
+uv run benefind normalize-urls
+uv run benefind review-url-normalization
 uv run benefind prepare-scraping
 uv run benefind scrape
 uv run benefind evaluate
@@ -18,9 +20,11 @@ uv run benefind report
 uv run benefind parse       # Step 1: Download & parse PDF
 uv run benefind filter      # Step 2: Filter to Bezirk Winterthur
 uv run benefind discover    # Step 3a: Find org websites
-uv run benefind prepare-scraping  # Step 3b: robots/sitemap URL planning
-uv run benefind scrape      # Step 3c: Scrape websites
-uv run benefind evaluate    # Step 3d: LLM evaluation
+uv run benefind normalize-urls          # Step 3b: normalize + build mandatory URL review queue
+uv run benefind review-url-normalization # Step 3b-review: decide final URL per org
+uv run benefind prepare-scraping        # Step 3c: robots/scope URL planning + ranking
+uv run benefind scrape      # Step 3d: Scrape websites
+uv run benefind evaluate    # Step 3e: LLM evaluation
 uv run benefind report      # Step 4: Generate report
 ```
 
@@ -31,6 +35,8 @@ To avoid burning API credits during iteration, create a small subset first:
 ```bash
 uv run benefind subset              # default: 20 random rows
 uv run benefind discover
+uv run benefind normalize-urls
+uv run benefind review-url-normalization
 uv run benefind prepare-scraping
 uv run benefind scrape
 uv run benefind evaluate
@@ -43,6 +49,8 @@ steps. Default behavior doubles the current subset size (for example
 ```bash
 uv run benefind extend
 uv run benefind discover
+uv run benefind normalize-urls
+uv run benefind review-url-normalization
 uv run benefind prepare-scraping
 uv run benefind scrape
 uv run benefind evaluate
@@ -141,19 +149,46 @@ Every website decision is persisted immediately.
 `benefind prepare-scraping` behavior highlights:
 
 - derives robots policy status per organization website (`allowed`, `blocked`, `unknown`)
-- derives URL scope from seed website URL:
+- normalizes the discovered website URL into the most plausible crawl base before scoping:
   - host scope for root-like seeds
-  - path-prefix scope for deep subpage seeds
+  - language-root scope for leaf pages like `/de/kontakt`
+  - path-prefix scope for deep portal/subsite URLs to avoid unrelated host pages
 - default scope is same-host only; subdomains are excluded unless `scraping.prepare_include_subdomains=true`
-- discovers URLs sitemap-first, then local-link fallback (no content filtering in this step)
+- discovers URLs sitemap-first and falls back to local-link exploration when sitemap discovery
+  yields no URLs, appears stale, or produces too few rankable candidates
+- keeps only the top-ranked in-scope URLs after scoring descriptive pages up and noisy/event/news
+  listings down
+- treats `http://` and `https://` variants of the same host+path as one candidate and keeps
+  the HTTPS version when both appear
 - writes two artifacts:
   - `data/filtered/organizations_scrape_prep.csv` (per-org prep status)
-  - `data/orgs/<_org_id>/scrape_prep/sitemap_urls.csv` (prepared URL list per org)
+  - `data/orgs/<_org_id>/scrape_prep/sitemap_urls.csv` (ranked prepared URL list per org,
+    including score/reason metadata)
 - supports quick probes:
   - `uv run benefind prepare-scraping --debug-sample`
   - `uv run benefind prepare-scraping --subset -n 10`
 - runs organization prep concurrently (config: `scraping.prepare_max_workers`, optional CLI override `--workers`)
 - persists results incrementally after each organization, so interrupted runs keep completed work
+
+Prepare-scraping URL scoring reads its lexical ranking rules from `config/url_scoring.toml`.
+For provenance and maintenance guidance, see `docs/url-scoring-method.md`.
+
+URL normalization audit helpers (for FP/FN tuning):
+
+```bash
+uv run benefind normalize-urls --input data/filtered/organizations_with_websites.csv
+# review mandatory pending path URLs and set final URLs in-place
+uv run benefind normalize-urls-report --input data/filtered/organizations_with_websites.csv
+uv run benefind review-url-normalization
+```
+
+`normalize-urls` writes normalization suggestions directly into
+`data/filtered/organizations_with_websites.csv` (single source of truth).
+All non-root path URLs are queued for mandatory review before prepare-scraping.
+`review-url-normalization` writes final decisions back to the same file (`_website_url_final`) after each action.
+It also supports excluding organizations directly from this step.
+Legacy normalization labels are only auto-migrated when the historical URL context still matches
+the current row; otherwise the row stays pending for manual review.
 
 ## Alignment check for steps 3b+
 
@@ -166,7 +201,7 @@ run a quick alignment check before relying on downstream outputs:
   `_website_origin`, score/decision metadata)
 - verify exclusion semantics still match expectations for `scrape` and `evaluate`
   (excluded rows should be skipped)
-- run `discover -> review websites -> prepare-scraping -> scrape -> evaluate -> report` on a small
+- run `discover -> review websites -> normalize-urls -> review-url-normalization -> prepare-scraping -> scrape -> evaluate -> report` on a small
   subset first and inspect artifacts under `data/orgs/` and `data/reports/`
 - if schema assumptions changed, update step-local logic and docs in one pass
 

@@ -51,14 +51,19 @@ respect_robots_txt = true
 # Prepare-scraping scope: keep same-host URLs only by default
 prepare_include_subdomains = false
 
-# Prepare-scraping URL planning limits (sitemap-first, then local-link fallback)
-prepare_max_urls_per_org = 200
+# Prepare-scraping ranking and discovery limits
+prepare_keep_ranked_urls_per_org = 80
+prepare_discovery_safety_cap = 2000
+prepare_stale_sitemap_days = 365
+prepare_section_cap_per_org = 20
+
+# Prepare-scraping discovery limits (sitemap-first, then local-link fallback)
 prepare_sitemap_max_files = 50
 prepare_sitemap_max_depth = 4
 prepare_fallback_max_visits = 120
 
 # Concurrent organization-level workers for prepare-scraping
-prepare_max_workers = 8
+prepare_max_workers = 32
 
 [search]
 # Search provider: "brave"

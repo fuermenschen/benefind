@@ -31,7 +31,17 @@ from benefind.config import DATA_DIR, PROJECT_ROOT, load_settings
 load_dotenv(PROJECT_ROOT / ".env")
 
 
-STEPS = ["parse", "filter", "discover", "prepare-scraping", "scrape", "evaluate", "report"]
+STEPS = [
+    "parse",
+    "filter",
+    "discover",
+    "normalize-urls",
+    "review-url-normalization",
+    "prepare-scraping",
+    "scrape",
+    "evaluate",
+    "report",
+]
 
 
 def confirm(message: str) -> bool:
@@ -127,14 +137,14 @@ def step_discover(settings):
 
 
 def step_scrape(settings):
-    """Step 3c: Scrape websites."""
+    """Step 3d: Scrape websites."""
     import pandas as pd
 
     from benefind.prepare_scraping import load_org_targets
     from benefind.scrape import scrape_organization_urls
 
     print("\n" + "=" * 60)
-    print("STEP 3c: Scrape websites")
+    print("STEP 3d: Scrape websites")
     print("=" * 60)
 
     input_path = DATA_DIR / "filtered" / "organizations_scrape_prep.csv"
@@ -184,10 +194,39 @@ def step_scrape(settings):
     return True
 
 
+def step_normalize_urls(settings):
+    """Step 3b: Build URL normalization suggestions + mandatory review queue."""
+    from benefind.cli import normalize_urls
+
+    print("\n" + "=" * 60)
+    print("STEP 3b: Normalize discovered URLs")
+    print("=" * 60)
+
+    try:
+        normalize_urls()
+    except SystemExit:
+        return False
+    return True
+
+
+def step_review_url_normalization(settings):
+    """Step 3b-review: Manual URL normalization decisions."""
+    from benefind.review import review_url_normalization
+
+    print("\n" + "=" * 60)
+    print("STEP 3b-review: Review URL normalization")
+    print("=" * 60)
+
+    _ = settings
+    review_url_normalization()
+    return True
+
+
 def step_prepare_scraping(settings):
-    """Step 3b: Prepare scraping scope and target URLs."""
+    """Step 3c: Prepare scraping scope and target URLs."""
     import pandas as pd
 
+    from benefind.exclusion_reasons import has_exclusion_reason_series
     from benefind.prepare_scraping import (
         PrepareCheckpointWriter,
         load_prepare_summary,
@@ -195,7 +234,7 @@ def step_prepare_scraping(settings):
     )
 
     print("\n" + "=" * 60)
-    print("STEP 3b: Prepare scraping")
+    print("STEP 3c: Prepare scraping")
     print("=" * 60)
 
     input_path = DATA_DIR / "filtered" / "organizations_with_websites.csv"
@@ -204,13 +243,31 @@ def step_prepare_scraping(settings):
         return False
 
     df = pd.read_csv(input_path, encoding="utf-8-sig")
-    if "_org_id" not in df.columns or "_website_url" not in df.columns:
-        print("ERROR: input CSV missing required _org_id/_website_url columns.")
+    if "_org_id" not in df.columns or "_website_url_final" not in df.columns:
+        print("ERROR: input CSV missing required _org_id/_website_url_final columns.")
         return False
 
     if "_excluded_reason" not in df.columns:
         df["_excluded_reason"] = ""
-    excluded_mask = df["_excluded_reason"].astype(str).str.strip() != ""
+    excluded_mask = has_exclusion_reason_series(df["_excluded_reason"])
+
+    if "_website_url_review_needed" in df.columns:
+        unresolved = (
+            df["_website_url_review_needed"].astype(str).str.strip().str.lower().isin(
+                {"1", "true", "yes", "y"}
+            )
+            & (df["_website_url_final"].astype(str).str.strip() == "")
+            & ~excluded_mask
+        )
+        unresolved_count = int(unresolved.sum())
+        if unresolved_count > 0:
+            print(
+                "ERROR: URL normalization review incomplete. "
+                f"{unresolved_count} rows still need final URL decisions."
+            )
+            print("Run: uv run benefind review-url-normalization")
+            return False
+
     active_df = df[~excluded_mask].copy()
 
     name_column = "Bezeichnung" if "Bezeichnung" in active_df.columns else active_df.columns[0]
@@ -235,7 +292,7 @@ def step_prepare_scraping(settings):
         settings,
         org_id_column="_org_id",
         name_column=name_column,
-        website_column="_website_url",
+        website_column="_website_url_final",
         on_result=on_result,
     )
 
@@ -246,13 +303,13 @@ def step_prepare_scraping(settings):
 
 
 def step_evaluate(settings):
-    """Step 3d: LLM evaluation."""
+    """Step 3e: LLM evaluation."""
     import pandas as pd
 
     from benefind.evaluate import evaluate_batch
 
     print("\n" + "=" * 60)
-    print("STEP 3d: Evaluate organizations with LLM")
+    print("STEP 3e: Evaluate organizations with LLM")
     print("=" * 60)
 
     input_path = DATA_DIR / "filtered" / "organizations_with_websites.csv"
@@ -295,6 +352,8 @@ STEP_FUNCTIONS = {
     "parse": step_parse,
     "filter": step_filter,
     "discover": step_discover,
+    "normalize-urls": step_normalize_urls,
+    "review-url-normalization": step_review_url_normalization,
     "prepare-scraping": step_prepare_scraping,
     "scrape": step_scrape,
     "evaluate": step_evaluate,

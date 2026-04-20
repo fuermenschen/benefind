@@ -1,0 +1,246 @@
+# URL scoring rules for `prepare-scraping`.
+#
+# How this file was derived:
+# - First, we downloaded a broad sitemap-style URL set for each organization (up to 200 URLs)
+#   without ranking or scoring them.
+# - From those URLs, we extracted path segments and canonicalized them before review:
+#   - URL-decoded `%xx` and `+`
+#   - lowercased
+#   - normalized umlauts (`ä->ae`, `ö->oe`, `ü->ue`, `ß->ss`)
+#   - normalized spaces and `_` to `-`
+#   - stripped page-like suffixes such as `.html`, `.php`, `.aspx`
+#   - kept non-page suffixes as direct ignore/exclude evidence
+# - We then manually identified an initial set of useful keywords and labels.
+# - After labeling more segments, embeddings were used to surface similar candidates for further review.
+# - Based on that expanded labeled set, we manually derived conservative lexical rules that keep
+#   precision high.
+#
+# Intended semantics:
+# - favor: descriptive / identity / governance pages that should surface early
+# - penalize: potentially relevant but usually secondary pages
+# - exclude: technical/noise/system paths that should not consume ranking slots
+#
+# This file is intentionally lexical and conservative. It is not meant to perfectly classify
+# every URL segment; it exists to improve ranking quality before the hard page cap is applied.
+
+[url_scoring]
+favor_tokens = [
+  "about",
+  "aboutus",
+  "leitbild",
+  "mission",
+  "organisation",
+  "organization",
+  "portrait",
+  "portraet",
+  "stiftung",
+  "team",
+  "ueber",
+  "ueberuns",
+  "uber",
+  "uberuns",
+  "verein",
+  "annual",
+  "annualreport",
+  "angebot",
+  "angebote",
+  "contact",
+  "impressum",
+  "jahresbericht",
+  "kontakt",
+  "projekte",
+  "projects",
+]
+
+favor_regexes = [
+  "^(about(-us)?|wer-wir-sind|ueber-uns|uber-uns|ueberuns|portrait|portraet|leitbild|verein|stiftung(en)?|team|vorstand|organisation|spenden?|kontakt(formular)?|contact|impressum(-datenschutz)?|angebote?|angebot|projekte?|projects?|jahresbericht(e)?|mitglied(_werden|-werden)?|mitmachen|goennerschaft|willkommen|offene-stellen|unterstuetzen|unterstuetzung|anmeldung|anmeldeformular)$",
+  "^home(-\\d+)?$",
+  "^homepage$",
+  "^index(-\\d+)?$",
+  "^start(seite)?(-\\d+)?$",
+  "^geschichten?$",
+  "^infos?$",
+  "^information(en)?$",
+  "^faq$",
+  "^statuten$",
+  "^verwaltung$",
+  "^dienstleistungen$",
+  "^themen$",
+  "^ueber$",
+  "^mitgliedschaft(en)?$",
+  "^generalversammlung$",
+  "^mitgliederversammlung$",
+  "^kasse$",
+  "^chronik$",
+  "^rueckblick$",
+  "^jugend(arbeit)?$",
+  "^aktiv-werden$",
+  "^freiwilligenarbeit$",
+  "^engagement$",
+]
+
+penalize_tokens = [
+  "agenda",
+  "calendar",
+  "event",
+  "events",
+  "termine",
+  "termin",
+  "veranstaltung",
+  "veranstaltungen",
+  "aktuelles",
+  "artikel",
+  "blog",
+  "meldung",
+  "news",
+  "archive",
+  "detail",
+  "details",
+  "eventdetails",
+  "listing",
+  "post",
+]
+
+penalize_regexes = [
+  "^(event|events|event-details|agenda(-alle)?|veranstaltung(en)?|termin(e)?|news(-events)?|blog|artikel|archiv|aktuell(es)?|category|author|post|tag|galerie|gallery)$",
+  "^(datenschutz.*|privacy-policy)$",
+  "^jahresbericht-\\d{4}$",
+]
+
+exclude_tokens = [
+  "app",
+  "component",
+  "type",
+  "data",
+  "document",
+  "documents",
+  "userupload",
+  "doc",
+  "createpdf",
+  "mpdf",
+  "thumbs",
+  "ugd",
+  "test",
+  "testseite",
+  "helloworld",
+  "hallowelt",
+  "imprint",
+  "english",
+  "footer",
+  "nutzungshinweise",
+  "newsletteranmeldung",
+  "datenschutzerklarung",
+  "intranet",
+  "profil",
+  "samplepage",
+  "elementor",
+  "plugin",
+  "plugins",
+  "public",
+  "processed",
+  "pictures",
+  "view",
+  "rte",
+  "rtr",
+  "uproc",
+  "cookie",
+  "login",
+]
+
+exclude_regexes = [
+  "^(wp-content|uploads?|fileadmin|_files|cdn-cgi|email-protection|resources?|assets?|static|media|images?|img|files?|downloads?|download|pdf|jpg|jpeg|png|gif|svg|xml|rss|json|index\\.php|index\\.html|wp-login\\.php|sitemap(\\.html)?|search|cart|warenkorb|customer|uncategorized|fileservlet|content|sites?)$",
+  ".*\\.(pdf|jpg|jpeg|png|gif|svg|xml|rss|json|html|php)$",
+  "^(login|anmelden|suche|suchen|profile|intern|wp-login|passwort-.+)$",
+  "^.*cookie.*$",
+  "^.*login.*$",
+  "^(app|component|type|data|documents?|user-upload|doc|createpdf|mpdf|thumbs|ugd)$",
+  "^(test|testseite|hello-world|hallo-welt)$",
+  "^(imprint|english|footer|nutzungshinweise)$",
+  "^cookie-einstellungen$",
+  "^newsletter-anmeldung$",
+  "^a-z$",
+  "^datenschutzerklarung$",
+  "^intranet$",
+  "^profil$",
+  "^sample-page$",
+  "^elementor(-hf)?$",
+  "^plugins$",
+  "^public$",
+  "^processed$",
+  "^pictures$",
+  "^view$",
+  "^rte$",
+  "^rtr$",
+  "^uproc$",
+  "^\\.cm4all$",
+]
+
+cms_scaffold_segments = [
+  "site",
+  "web",
+  "website",
+  "www",
+  "pages",
+  "page",
+  "content",
+  "cms",
+  "main",
+  "public",
+  "wp",
+  "wordpress",
+  "typo3",
+  "joomla",
+  "drupal",
+]
+
+technical_root_segments = ["_files", "api", "feed", "wp-content"]
+technical_segment_pairs = [
+  ["fileadmin", "_processed_"],
+  ["index.php", "download_file"],
+]
+
+non_html_extensions = [
+  ".7z",
+  ".avi",
+  ".bin",
+  ".css",
+  ".csv",
+  ".doc",
+  ".docx",
+  ".eot",
+  ".gif",
+  ".gz",
+  ".ico",
+  ".ics",
+  ".jpeg",
+  ".jpg",
+  ".js",
+  ".json",
+  ".m4a",
+  ".mov",
+  ".mp3",
+  ".mp4",
+  ".mpeg",
+  ".odt",
+  ".ogg",
+  ".pdf",
+  ".png",
+  ".ppt",
+  ".pptx",
+  ".rar",
+  ".rss",
+  ".svg",
+  ".tar",
+  ".tgz",
+  ".ttf",
+  ".txt",
+  ".wav",
+  ".webm",
+  ".webp",
+  ".woff",
+  ".woff2",
+  ".xls",
+  ".xlsx",
+  ".xml",
+  ".zip",
+]

@@ -47,11 +47,14 @@ class ScrapingConfig:
     user_agent: str = "benefind/0.1 (nonprofit research; https://hfm-winti.ch)"
     respect_robots_txt: bool = True
     prepare_include_subdomains: bool = False
-    prepare_max_urls_per_org: int = 200
+    prepare_keep_ranked_urls_per_org: int = 80
+    prepare_discovery_safety_cap: int = 2000
+    prepare_stale_sitemap_days: int = 365
+    prepare_section_cap_per_org: int = 20
     prepare_sitemap_max_files: int = 50
     prepare_sitemap_max_depth: int = 4
     prepare_fallback_max_visits: int = 120
-    prepare_max_workers: int = 8
+    prepare_max_workers: int = 32
 
 
 @dataclass
@@ -101,6 +104,20 @@ class MunicipalityConfig:
     municipalities: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
     excluded_municipalities: list[str] = field(default_factory=list)
+
+
+@dataclass
+class UrlScoringConfig:
+    favor_tokens: list[str] = field(default_factory=list)
+    favor_regexes: list[str] = field(default_factory=list)
+    penalize_tokens: list[str] = field(default_factory=list)
+    penalize_regexes: list[str] = field(default_factory=list)
+    exclude_tokens: list[str] = field(default_factory=list)
+    exclude_regexes: list[str] = field(default_factory=list)
+    cms_scaffold_segments: list[str] = field(default_factory=list)
+    technical_root_segments: list[str] = field(default_factory=list)
+    technical_segment_pairs: list[list[str]] = field(default_factory=list)
+    non_html_extensions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -177,3 +194,10 @@ def load_settings(config_dir: Path | None = None) -> Settings:
         ),
         prompts=[PromptTemplate(**p) for p in prompts_data.get("prompts", [])],
     )
+
+
+def load_url_scoring_config(config_dir: Path | None = None) -> UrlScoringConfig:
+    """Load config/url_scoring.toml into a UrlScoringConfig object."""
+    config_dir = config_dir or CONFIG_DIR
+    scoring_data = _load_toml(config_dir / "url_scoring.toml")
+    return UrlScoringConfig(**scoring_data.get("url_scoring", {}))

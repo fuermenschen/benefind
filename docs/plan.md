@@ -266,7 +266,8 @@ These steps are self-contained and require no API keys.
 2. **Validate exclusion semantics end-to-end**: ensure excluded organizations
    are skipped consistently in scrape/evaluate and absent from final summaries.
 3. **Run a subset-based regression** (`subset -> discover -> review websites ->
-   scrape -> evaluate -> report`) and inspect generated artifacts manually.
+   normalize-urls -> review-url-normalization -> prepare-scraping -> scrape -> evaluate -> report`)
+   and inspect generated artifacts manually.
 4. **Adjust step-local schema handling where needed** and update docs in the
    same pass when columns/decision metadata assumptions change.
 5. **Iterate prompt quality** after schema alignment is confirmed.
