@@ -96,3 +96,7 @@ URL normalization workflow settings:
   same CSV.
 - `benefind prepare-scraping` requires `_website_url_final` and blocks if unresolved mandatory
   normalization reviews remain (excluded rows are ignored).
+- In prepare-scraping, `_website_url_final` is authoritative for scope:
+  root final URLs use host scope; non-root final URLs keep exact path-prefix scope.
+  Prepare-scraping still applies reachability probes (scheme/www/redirect handling),
+  but does not perform heuristic scope rewrites.

@@ -193,7 +193,7 @@ def _resolve_reachable_scope(
             continue
 
         resolved_from = final_url or candidate
-        resolved_scope = _build_scope(resolved_from, scope.include_subdomains)
+        resolved_scope = _build_scope_from_final_url(resolved_from, scope.include_subdomains)
         if resolved_scope is not None:
             return resolved_scope, ""
 
@@ -657,6 +657,45 @@ def _build_scope(seed_url: str, include_subdomains: bool) -> ScopeDefinition | N
     )
 
 
+def _build_scope_from_final_url(
+    seed_url: str,
+    include_subdomains: bool,
+) -> ScopeDefinition | None:
+    """Build strict scope from reviewed final URL.
+
+    This variant treats the reviewed `_website_url_final` as authoritative:
+    - root path -> host scope
+    - non-root path -> exact path-prefix scope
+    """
+    normalized = _normalize_url(seed_url)
+    if not normalized:
+        return None
+
+    parsed = urlsplit(normalized)
+    seed_host = _normalize_host(parsed.netloc)
+    path = parsed.path or "/"
+
+    if path == "/":
+        scope_mode = "host"
+        path_prefix = "/"
+        scope_reason = "final_url_root"
+    else:
+        scope_mode = "path_prefix"
+        path_prefix = path
+        scope_reason = "final_url_path_prefix"
+
+    return ScopeDefinition(
+        seed_original_url=normalized,
+        seed_url=normalized,
+        seed_origin=f"{parsed.scheme}://{parsed.netloc}",
+        seed_host=seed_host,
+        scope_mode=scope_mode,
+        path_prefix=path_prefix,
+        include_subdomains=include_subdomains,
+        scope_reason=scope_reason,
+    )
+
+
 def _robots_is_allowed(
     robots_parser: RobotExclusionRulesParser | None,
     user_agent: str,
@@ -1060,7 +1099,7 @@ def _prepare_single_org(
         return summary, []
 
     include_subdomains = bool(settings.scraping.prepare_include_subdomains)
-    scope = _build_scope(website_url, include_subdomains)
+    scope = _build_scope_from_final_url(website_url, include_subdomains)
     if scope is None:
         summary = _make_prepare_summary(
             org_id=org_id,

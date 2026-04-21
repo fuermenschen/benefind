@@ -907,8 +907,10 @@ def prepare_scraping(
 
     Derives robots policy + scope per organization website and writes
     checkpointed prep artifacts: one global summary CSV plus one per-org
-    ranked prepared URL CSV with score/reason metadata. URLs with identical
-    host+path are deduplicated across schemes, preferring HTTPS.
+    ranked prepared URL CSV with score/reason metadata. `_website_url_final`
+    is treated as authoritative for scope (root => host scope; non-root =>
+    exact path-prefix scope). URLs with identical host+path are deduplicated
+    across schemes, preferring HTTPS.
     """
     import pandas as pd
 

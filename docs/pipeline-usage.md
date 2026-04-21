@@ -151,10 +151,10 @@ Every website decision is persisted immediately.
 - derives robots policy status per organization website (`allowed`, `blocked`, `unknown`)
 - probes the seed URL with scheme/www fallbacks before robots/sitemap discovery and adopts
   the first reachable redirected site base (prevents silent one-URL failures on moved domains)
-- normalizes the discovered website URL into the most plausible crawl base before scoping:
-  - host scope for root-like seeds
-  - language-root scope for leaf pages like `/de/kontakt`
-  - path-prefix scope for deep portal/subsite URLs to avoid unrelated host pages
+- uses reviewed `_website_url_final` as authoritative scope seed:
+  - root final URL -> host scope
+  - non-root final URL -> exact path-prefix scope
+  - no heuristic path promotion/demotion in prepare-scraping
 - default scope is same-host only; subdomains are excluded unless `scraping.prepare_include_subdomains=true`
 - discovers URLs sitemap-first and falls back to local-link exploration when sitemap discovery
   yields no URLs, appears stale, or produces too few rankable candidates
