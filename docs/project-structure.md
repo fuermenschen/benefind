@@ -15,9 +15,7 @@ benefind/
 │   └── reports/             # Final summary reports
 ├── docs/                    # Project docs
 ├── scripts/
-│   ├── run_pipeline.py      # Full pipeline orchestrator
-│   ├── check_normalization.py # URL normalization audit helper
-│   └── review_flagged.py    # Manual review helper
+│   └── check_normalization.py # URL normalization audit helper
 └── src/benefind/            # Source code
     ├── cli.py               # CLI entry point
     ├── config.py            # Configuration loading

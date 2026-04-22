@@ -9,6 +9,7 @@ uv run benefind discover
 uv run benefind normalize-urls
 uv run benefind review-url-normalization
 uv run benefind prepare-scraping
+uv run benefind review scrape-readiness
 uv run benefind scrape
 uv run benefind evaluate
 uv run benefind report
@@ -23,6 +24,7 @@ uv run benefind discover    # Step 3a: Find org websites
 uv run benefind normalize-urls          # Step 3b: normalize + build mandatory URL review queue
 uv run benefind review-url-normalization # Step 3b-review: decide final URL per org
 uv run benefind prepare-scraping        # Step 3c: robots/scope URL planning + ranking
+uv run benefind review scrape-readiness # Step 3c-review: resolve blocked/seed-unreachable prep rows
 uv run benefind scrape      # Step 3d: Scrape websites
 uv run benefind evaluate    # Step 3e: LLM evaluation
 uv run benefind report      # Step 4: Generate report
@@ -38,6 +40,7 @@ uv run benefind discover
 uv run benefind normalize-urls
 uv run benefind review-url-normalization
 uv run benefind prepare-scraping
+uv run benefind review scrape-readiness
 uv run benefind scrape
 uv run benefind evaluate
 ```
@@ -52,6 +55,7 @@ uv run benefind discover
 uv run benefind normalize-urls
 uv run benefind review-url-normalization
 uv run benefind prepare-scraping
+uv run benefind review scrape-readiness
 uv run benefind scrape
 uv run benefind evaluate
 ```
@@ -117,12 +121,6 @@ uv run benefind discover --debug-org-name "Musikkollegium Winterthur"
 
 In debug mode, discover also prints the simulated final decision stage and, when LLM verification is triggered, the LLM verification prompt and response text.
 
-## Full orchestrated run
-
-```bash
-uv run python scripts/run_pipeline.py
-```
-
 ## Manual review helpers
 
 ```bash
@@ -169,8 +167,18 @@ Every website decision is persisted immediately.
 - supports quick probes:
   - `uv run benefind prepare-scraping --debug-sample`
   - `uv run benefind prepare-scraping --subset -n 10`
+  - `uv run benefind prepare-scraping --org-id <_org_id> --refresh`
 - runs organization prep concurrently (config: `scraping.prepare_max_workers`, optional CLI override `--workers`)
 - persists results incrementally after each organization, so interrupted runs keep completed work
+
+`benefind review scrape-readiness` behavior highlights:
+
+- reviews only high-risk prep rows:
+  - `_scrape_prep_status=blocked`
+  - `_scrape_prep_status=no_urls` with `_scrape_robots_fetch=seed_unreachable`
+- supports actions to retry prepare, set final URL and re-prepare, exclude, or defer
+- writes readiness decisions immediately and keeps queue state resumable
+- if you update a final URL from this step, prepare is re-run for that org immediately
 
 Prepare-scraping URL scoring reads its lexical ranking rules from `config/url_scoring.toml`.
 For provenance and maintenance guidance, see `docs/url-scoring-method.md`.
