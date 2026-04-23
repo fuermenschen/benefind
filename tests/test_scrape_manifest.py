@@ -111,6 +111,8 @@ def test_scrape_rerun_keeps_playwright_metadata_in_skipped_rows(
             extractor_score=60,
             extractor_score_static_best=15,
             extractor_score_render_best=60,
+            content_quality="ok",
+            content_quality_reason="",
             fetch_mode="playwright",
             render_trigger_reason="poor_static_extraction:markers=id___next",
             final_url="https://example.org/final",
@@ -132,6 +134,7 @@ def test_scrape_rerun_keeps_playwright_metadata_in_skipped_rows(
     skipped = manifest[manifest["_page_status"].astype(str) == "skipped"].iloc[0]
     assert str(skipped["_fetch_mode"]) == "playwright"
     assert int(float(skipped["_extractor_score_render_best"])) == 60
+    assert str(skipped["_content_quality"]) == "ok"
     assert str(skipped["_render_trigger_reason"]) == "poor_static_extraction:markers=id___next"
     assert str(skipped["_final_url"]) == "https://example.org/final"
 
@@ -180,3 +183,4 @@ def test_scrape_result_and_run_meta_include_failure_reason_distribution(
     run_meta_path = tmp_path / "orgs" / "org_test_4" / "scrape" / "run_meta.json"
     run_meta = json.loads(run_meta_path.read_text(encoding="utf-8"))
     assert run_meta["_failure_reason_counts"] == {"http_403": 1}
+    assert run_meta["_content_quality_counts"] == {"unknown": 1}

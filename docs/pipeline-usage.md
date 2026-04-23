@@ -187,14 +187,16 @@ Every website decision is persisted immediately.
 - `uv run benefind scrape --debug-sample`
 - `uv run benefind scrape --debug-sample --debug-org-id org_xxxxx_1`
 - `uv run benefind scrape --refresh-existing`
+- `uv run benefind scrape --reset` (interactive wipe of scrape outputs only; keeps `scrape_prep/`)
 - `uv run benefind scrape --verbose`
 
 Scrape execution policy highlights:
 
-- runs static HTML extraction first and only escalates to Playwright when static extraction is poor
-- never uses Playwright for network/TLS failures, HTTP `401/403/5xx`, or non-HTML responses
+- runs static HTML extraction first and escalates to Playwright when static extraction is poor
+- low-score pages are kept as success with quality flags (instead of being dropped)
+- non-HTML text-like responses (including PDFs) are extracted and stored when possible
 - stores URL-level scrape manifest metadata per attempt, including fetch mode, extractor scores,
-  render trigger reason, final URL, and page metadata fields
+  content quality flags, render trigger reason, final URL, and page metadata fields
 - Playwright fallback requires browser binaries once per environment:
   `uv run playwright install chromium`
 - if Playwright runtime is unavailable (missing package/browser), scrape keeps static extraction as

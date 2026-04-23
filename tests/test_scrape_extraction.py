@@ -210,7 +210,7 @@ def test_scrape_page_falls_back_to_static_when_playwright_unavailable(
     assert "render_fallback=playwright_not_installed" in result.render_trigger_reason
 
 
-def test_scrape_page_render_error_still_fails_when_not_infra_failure(
+def test_scrape_page_render_error_keeps_static_low_quality_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -239,10 +239,11 @@ def test_scrape_page_render_error_still_fails_when_not_infra_failure(
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         result = scrape._scrape_page_static(client, "https://example.org/")
 
-    assert result.status == "failed"
-    assert result.failure_reason_code == "playwright_render_failed"
-    assert result.failure_detail == "navigation timeout"
-    assert result.fetch_mode == "playwright"
+    assert result.status == "success"
+    assert result.failure_reason_code == ""
+    assert result.fetch_mode == "static"
+    assert result.content_quality == "low"
+    assert "render_failed:navigation timeout" in result.content_quality_reason
 
 
 def test_scrape_page_non_html_never_calls_playwright(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -265,13 +266,113 @@ def test_scrape_page_non_html_never_calls_playwright(monkeypatch: pytest.MonkeyP
         )
 
     monkeypatch.setattr(scrape, "_render_page_playwright", fake_render)
+    monkeypatch.setattr(
+        scrape,
+        "_extract_non_html_content",
+        lambda _response: (
+            "# PDF content\n\nExtracted text",
+            "pdfplumber",
+            "non_html:application_pdf",
+        ),
+    )
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         result = scrape._scrape_page_static(client, "https://example.org/file.pdf")
 
-    assert result.status == "failed"
-    assert result.failure_reason_code == "non_html_response"
+    assert result.status == "success"
+    assert result.failure_reason_code == ""
+    assert result.extractor_selected == "pdfplumber"
+    assert result.render_trigger_reason == "non_html:application_pdf"
     assert called["render"] is False
+
+
+def test_scrape_page_keeps_low_quality_after_render_when_all_scores_poor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            text="<html><head><title>Static</title></head><body>tiny</body></html>",
+        )
+
+    selection_results = iter(
+        [
+            ("markdownify", "tiny", 10),
+            ("readability-lxml", "still tiny", 15),
+        ]
+    )
+
+    monkeypatch.setattr(
+        scrape,
+        "_select_best_extractor",
+        lambda *_args, **_kwargs: next(selection_results),
+    )
+    monkeypatch.setattr(
+        scrape,
+        "_render_page_playwright",
+        lambda *_args, **_kwargs: scrape.PlaywrightRenderResult(
+            status="success",
+            html="<html><head><title>Rendered</title></head><body>still tiny</body></html>",
+            final_url="https://example.org/rendered",
+            failure_detail="",
+        ),
+    )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = scrape._scrape_page_static(client, "https://example.org/")
+
+    assert result.status == "success"
+    assert result.fetch_mode == "playwright"
+    assert result.content_quality == "low"
+    assert "score_below_threshold:15<35" in result.content_quality_reason
+    assert result.extractor_score == 15
+    assert result.extractor_score_static_best == 10
+    assert result.extractor_score_render_best == 15
+
+
+def test_scrape_page_prefers_static_content_on_equal_score_tie(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            text="<html><head><title>Static</title></head><body>tiny</body></html>",
+        )
+
+    selection_results = iter(
+        [
+            ("markdownify", "static content survives", 0),
+            ("readability-lxml", "", 0),
+        ]
+    )
+
+    monkeypatch.setattr(
+        scrape,
+        "_select_best_extractor",
+        lambda *_args, **_kwargs: next(selection_results),
+    )
+    monkeypatch.setattr(
+        scrape,
+        "_render_page_playwright",
+        lambda *_args, **_kwargs: scrape.PlaywrightRenderResult(
+            status="success",
+            html="<html><head><title>Rendered</title></head><body></body></html>",
+            final_url="https://example.org/rendered",
+            failure_detail="",
+        ),
+    )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = scrape._scrape_page_static(client, "https://example.org/")
+
+    assert result.status == "success"
+    assert result.fetch_mode == "static"
+    assert result.content == "static content survives"
+    assert result.extractor_score == 0
+    assert result.extractor_score_static_best == 0
+    assert result.extractor_score_render_best == 0
 
 
 def test_scrape_page_http_other_status_returns_http_other_code() -> None:

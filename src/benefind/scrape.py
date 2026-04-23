@@ -12,6 +12,7 @@ Scraping is resumable at URL level: successful URLs are skipped on rerun unless
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import re
@@ -43,6 +44,11 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     sync_playwright = None
 
+try:
+    import pdfplumber
+except Exception:  # pragma: no cover - optional dependency
+    pdfplumber = None
+
 from benefind.config import DATA_DIR, Settings
 
 logger = logging.getLogger(__name__)
@@ -65,6 +71,8 @@ MANIFEST_COLUMNS = [
     "_extractor_score",
     "_extractor_score_static_best",
     "_extractor_score_render_best",
+    "_content_quality",
+    "_content_quality_reason",
     "_render_trigger_reason",
     "_final_url",
     "_metadata_title",
@@ -84,6 +92,7 @@ class ScrapeOrgResult:
     failed_count: int
     skipped_success_count: int
     failure_reason_counts: dict[str, int] = field(default_factory=dict)
+    content_quality_counts: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -98,6 +107,8 @@ class PageScrapeResult:
     extractor_score: int | None = None
     extractor_score_static_best: int | None = None
     extractor_score_render_best: int | None = None
+    content_quality: str = ""
+    content_quality_reason: str = ""
     fetch_mode: str = "static"
     render_trigger_reason: str = ""
     final_url: str = ""
@@ -353,6 +364,106 @@ def _score_extracted_content(content: str, metadata: dict[str, str]) -> int:
         score -= 10
 
     return max(0, min(100, int(score)))
+
+
+def _quality_from_score(
+    score: int | None,
+    *,
+    base_reason: str = "",
+) -> tuple[str, str]:
+    if score is None:
+        return "", str(base_reason or "").strip()
+
+    if int(score) >= ACCEPTABLE_EXTRACTION_SCORE:
+        return "ok", ""
+
+    reason = str(base_reason or "").strip()
+    threshold_reason = f"score_below_threshold:{int(score)}<{ACCEPTABLE_EXTRACTION_SCORE}"
+    if reason:
+        return "low", f"{reason};{threshold_reason}"
+    return "low", threshold_reason
+
+
+def _minimal_content_from_metadata(
+    metadata: dict[str, str],
+    *,
+    final_url: str,
+    content_type: str,
+    note: str,
+) -> str:
+    lines = ["# Low-content page"]
+    if final_url:
+        lines.append(f"- URL: {final_url}")
+    if content_type:
+        lines.append(f"- Content-Type: {content_type}")
+    if note:
+        lines.append(f"- Note: {note}")
+
+    title = str(metadata.get("title", "") or "").strip()
+    description = str(metadata.get("description", "") or "").strip()
+    canonical = str(metadata.get("canonical", "") or "").strip()
+    lang = str(metadata.get("lang", "") or "").strip()
+
+    if title:
+        lines.append(f"- Title: {title}")
+    if description:
+        lines.append(f"- Description: {description}")
+    if canonical:
+        lines.append(f"- Canonical: {canonical}")
+    if lang:
+        lines.append(f"- Language: {lang}")
+
+    return "\n".join(lines).strip()
+
+
+def _extract_pdf_text(content: bytes) -> str:
+    if pdfplumber is None:
+        return ""
+
+    try:
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            parts: list[str] = []
+            for page in pdf.pages:
+                text = str(page.extract_text() or "").strip()
+                if text:
+                    parts.append(text)
+    except Exception:
+        return ""
+
+    if not parts:
+        return ""
+
+    body = "\n\n".join(parts).strip()
+    if not body:
+        return ""
+
+    return f"# PDF content\n\n{body}".strip()
+
+
+def _extract_non_html_content(response: httpx.Response) -> tuple[str, str, str]:
+    content_type = str(response.headers.get("content-type", "") or "").lower()
+
+    if "application/pdf" in content_type:
+        extracted = _extract_pdf_text(response.content)
+        if not extracted:
+            return "", "", "pdf_text_extraction_failed"
+        return extracted, "pdfplumber", "non_html:application_pdf"
+
+    text_like_types = (
+        "text/plain",
+        "text/markdown",
+        "text/xml",
+        "application/json",
+        "application/xml",
+        "application/xhtml+xml",
+    )
+    if any(token in content_type for token in text_like_types):
+        text = str(response.text or "").strip()
+        if not text:
+            return "", "", "text_like_content_empty"
+        return text, "raw_text", f"non_html:{content_type.split(';', 1)[0]}"
+
+    return "", "", f"non_html_unsupported:{content_type or 'unknown'}"
 
 
 def _available_extractors() -> dict[str, Callable[[str], str]]:
@@ -613,10 +724,32 @@ def _scrape_page_static(
         )
 
     if "text/html" not in content_type.lower():
+        non_html_content, non_html_extractor, non_html_reason = _extract_non_html_content(response)
+        if non_html_content:
+            score = _score_extracted_content(non_html_content, {})
+            quality, quality_reason = _quality_from_score(score, base_reason=non_html_reason)
+            return PageScrapeResult(
+                status="success",
+                failure_reason_code="",
+                failure_detail="",
+                http_status=status_code,
+                content_type=content_type,
+                content=non_html_content,
+                extractor_selected=non_html_extractor,
+                extractor_score=score,
+                extractor_score_static_best=score,
+                extractor_score_render_best=None,
+                content_quality=quality,
+                content_quality_reason=quality_reason,
+                fetch_mode="static",
+                render_trigger_reason=non_html_reason,
+                final_url=response_final_url,
+            )
+
         return PageScrapeResult(
             status="failed",
             failure_reason_code="non_html_response",
-            failure_detail="",
+            failure_detail=non_html_reason,
             http_status=status_code,
             content_type=content_type,
             content="",
@@ -680,6 +813,47 @@ def _scrape_page_static(
                     extractor_score=extractor_score,
                     extractor_score_static_best=extractor_score,
                     extractor_score_render_best=None,
+                    content_quality="low",
+                    content_quality_reason=(
+                        f"low_score_static:{extractor_score};"
+                        f"render_unavailable:{render_result.failure_detail}"
+                    ),
+                    fetch_mode="static",
+                    render_trigger_reason=fallback_reason,
+                    final_url=response_final_url,
+                    metadata_title=metadata.get("title", ""),
+                    metadata_description=metadata.get("description", ""),
+                    metadata_canonical=metadata.get("canonical", ""),
+                    metadata_lang=metadata.get("lang", ""),
+                )
+
+            if extracted_content:
+                fallback_reason = (
+                    f"{render_trigger_reason}:render_fallback={render_result.failure_detail}"
+                )
+                logger.warning(
+                    (
+                        "Playwright render failed for %s; "
+                        "keeping static extraction as low-quality success"
+                    ),
+                    url,
+                )
+                return PageScrapeResult(
+                    status="success",
+                    failure_reason_code="",
+                    failure_detail="",
+                    http_status=status_code,
+                    content_type=content_type,
+                    content=extracted_content,
+                    extractor_selected=extractor_name,
+                    extractor_score=extractor_score,
+                    extractor_score_static_best=extractor_score,
+                    extractor_score_render_best=None,
+                    content_quality="low",
+                    content_quality_reason=(
+                        f"low_score_static:{extractor_score};"
+                        f"render_failed:{render_result.failure_detail}"
+                    ),
                     fetch_mode="static",
                     render_trigger_reason=fallback_reason,
                     final_url=response_final_url,
@@ -716,26 +890,28 @@ def _scrape_page_static(
             preferred_extractor=None,
         )
 
-        if render_score < ACCEPTABLE_EXTRACTION_SCORE:
-            return PageScrapeResult(
-                status="failed",
-                failure_reason_code="content_unusable_after_render",
-                failure_detail="",
-                http_status=status_code,
+        use_render = render_score > extractor_score
+        selected_content = render_content if use_render else extracted_content
+        selected_extractor = render_extractor_name if use_render else extractor_name
+        selected_score = render_score if use_render else extractor_score
+        selected_metadata = rendered_metadata if use_render else metadata
+        selected_final_url = (
+            render_result.final_url or response_final_url if use_render else response_final_url
+        )
+        selected_fetch_mode = "playwright" if use_render else "static"
+
+        if not selected_content:
+            selected_content = _minimal_content_from_metadata(
+                selected_metadata,
+                final_url=selected_final_url,
                 content_type=content_type,
-                content=render_content,
-                extractor_selected=render_extractor_name,
-                extractor_score=render_score,
-                extractor_score_static_best=extractor_score,
-                extractor_score_render_best=render_score,
-                fetch_mode="playwright",
-                render_trigger_reason=render_trigger_reason,
-                final_url=render_result.final_url or response_final_url,
-                metadata_title=rendered_metadata.get("title", ""),
-                metadata_description=rendered_metadata.get("description", ""),
-                metadata_canonical=rendered_metadata.get("canonical", ""),
-                metadata_lang=rendered_metadata.get("lang", ""),
+                note="extractor_empty_after_render",
             )
+
+        quality, quality_reason = _quality_from_score(
+            selected_score,
+            base_reason=f"low_score_after_render:selected={selected_score}",
+        )
 
         return PageScrapeResult(
             status="success",
@@ -743,20 +919,23 @@ def _scrape_page_static(
             failure_detail="",
             http_status=status_code,
             content_type=content_type,
-            content=render_content,
-            extractor_selected=render_extractor_name,
-            extractor_score=render_score,
+            content=selected_content,
+            extractor_selected=selected_extractor,
+            extractor_score=selected_score,
             extractor_score_static_best=extractor_score,
             extractor_score_render_best=render_score,
-            fetch_mode="playwright",
+            content_quality=quality,
+            content_quality_reason=quality_reason,
+            fetch_mode=selected_fetch_mode,
             render_trigger_reason=render_trigger_reason,
-            final_url=render_result.final_url or response_final_url,
-            metadata_title=rendered_metadata.get("title", ""),
-            metadata_description=rendered_metadata.get("description", ""),
-            metadata_canonical=rendered_metadata.get("canonical", ""),
-            metadata_lang=rendered_metadata.get("lang", ""),
+            final_url=selected_final_url,
+            metadata_title=selected_metadata.get("title", ""),
+            metadata_description=selected_metadata.get("description", ""),
+            metadata_canonical=selected_metadata.get("canonical", ""),
+            metadata_lang=selected_metadata.get("lang", ""),
         )
 
+    quality, quality_reason = _quality_from_score(extractor_score)
     return PageScrapeResult(
         status="success",
         failure_reason_code="",
@@ -768,6 +947,8 @@ def _scrape_page_static(
         extractor_score=extractor_score,
         extractor_score_static_best=extractor_score,
         extractor_score_render_best=None,
+        content_quality=quality,
+        content_quality_reason=quality_reason,
         fetch_mode="static",
         render_trigger_reason="",
         final_url=response_final_url,
@@ -862,6 +1043,7 @@ def scrape_organization_urls(
     failed_count = 0
     skipped_success_count = 0
     failure_reason_counts: dict[str, int] = {}
+    content_quality_counts: dict[str, int] = {}
 
     started_at = _now_iso()
     headers = {"User-Agent": user_agent}
@@ -894,6 +1076,10 @@ def scrape_organization_urls(
                     ),
                     "_extractor_score_render_best": existing_success.get(
                         "_extractor_score_render_best", ""
+                    ),
+                    "_content_quality": existing_success.get("_content_quality", ""),
+                    "_content_quality_reason": existing_success.get(
+                        "_content_quality_reason", ""
                     ),
                     "_render_trigger_reason": existing_success.get("_render_trigger_reason", ""),
                     "_final_url": existing_success.get("_final_url", ""),
@@ -930,6 +1116,8 @@ def scrape_organization_urls(
                 page_path.write_text(page_result.content, encoding="utf-8")
                 saved_path = str(page_path)
                 success_count += 1
+                quality = str(page_result.content_quality or "").strip() or "unknown"
+                content_quality_counts[quality] = content_quality_counts.get(quality, 0) + 1
             else:
                 failed_count += 1
                 reason = str(page_result.failure_reason_code or "").strip() or "unknown_failure"
@@ -957,6 +1145,8 @@ def scrape_organization_urls(
                 "_extractor_score_render_best": ""
                 if page_result.extractor_score_render_best is None
                 else page_result.extractor_score_render_best,
+                "_content_quality": page_result.content_quality,
+                "_content_quality_reason": page_result.content_quality_reason,
                 "_render_trigger_reason": page_result.render_trigger_reason,
                 "_final_url": page_result.final_url,
                 "_metadata_title": page_result.metadata_title,
@@ -989,6 +1179,9 @@ def scrape_organization_urls(
         "_failure_reason_counts": {
             key: failure_reason_counts[key] for key in sorted(failure_reason_counts)
         },
+        "_content_quality_counts": {
+            key: content_quality_counts[key] for key in sorted(content_quality_counts)
+        },
     }
     _write_json_atomic(run_meta_path, run_meta)
 
@@ -1010,6 +1203,9 @@ def scrape_organization_urls(
         skipped_success_count=skipped_success_count,
         failure_reason_counts={
             key: failure_reason_counts[key] for key in sorted(failure_reason_counts)
+        },
+        content_quality_counts={
+            key: content_quality_counts[key] for key in sorted(content_quality_counts)
         },
     )
 

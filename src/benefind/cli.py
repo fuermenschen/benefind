@@ -84,6 +84,10 @@ def _setup_logging(log_level: str = "INFO") -> None:
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("readability").setLevel(logging.WARNING)
+    logging.getLogger("readability.readability").setLevel(logging.WARNING)
+    logging.getLogger("trafilatura").setLevel(logging.ERROR)
+    logging.getLogger("trafilatura.core").setLevel(logging.ERROR)
 
 
 def _detect_first_column(columns: list[str], candidates: list[str], default: str = "") -> str:
@@ -265,6 +269,46 @@ def _delete_pdf_files(raw_dir: Path) -> int:
     return deleted
 
 
+def _count_tree_entries(directory: Path) -> tuple[int, int]:
+    files = 0
+    dirs = 0
+    for entry in directory.rglob("*"):
+        if entry.is_dir():
+            dirs += 1
+        elif entry.is_file():
+            files += 1
+    return files, dirs
+
+
+def _reset_scrape_artifacts(orgs_dir: Path) -> tuple[int, int, int]:
+    removed_files = 0
+    removed_dirs = 0
+    orgs_touched = 0
+
+    if not orgs_dir.exists():
+        return removed_files, removed_dirs, orgs_touched
+
+    for org_dir in orgs_dir.iterdir():
+        if not org_dir.is_dir() or org_dir.name == ".gitkeep":
+            continue
+
+        touched = False
+        for scrape_subdir in (org_dir / "pages", org_dir / "scrape"):
+            if not scrape_subdir.exists() or not scrape_subdir.is_dir():
+                continue
+
+            files, dirs = _count_tree_entries(scrape_subdir)
+            removed_files += files
+            removed_dirs += dirs + 1
+            shutil.rmtree(scrape_subdir)
+            touched = True
+
+        if touched:
+            orgs_touched += 1
+
+    return removed_files, removed_dirs, orgs_touched
+
+
 def _render_prepare_scraping_live_view(
     progress: Progress,
     *,
@@ -315,10 +359,10 @@ def _render_scrape_live_view(
     summary.add_row("Workers", str(workers))
     summary.add_row("Pending", str(pending))
     completed_parts = [
-        f"[green]{scraped_now} scraped[/green]",
-        f"[red]{failed_now} failed[/red]",
-        f"[yellow]{skipped_existing} skipped existing[/yellow]",
-        f"[dim]{skipped_missing_targets} missing targets[/dim]",
+        f"[green]{scraped_now} orgs scraped[/green]",
+        f"[red]{failed_now} orgs failed[/red]",
+        f"[yellow]{skipped_existing} orgs skipped existing[/yellow]",
+        f"[dim]{skipped_missing_targets} orgs missing targets[/dim]",
     ]
     summary.add_row("Completed", "  ".join(completed_parts))
     summary.add_row("Skipped excluded", str(skipped_excluded))
@@ -922,10 +966,10 @@ def prepare_scraping(
         "-n",
         help="Number of organizations to include when --subset is enabled.",
     ),
-    subset_seed: int = typer.Option(
-        42,
+    subset_seed: int | None = typer.Option(
+        None,
         "--subset-seed",
-        help="Random seed used for --subset sampling.",
+        help="Optional random seed used for --subset sampling (default: random each run).",
     ),
     workers: int | None = typer.Option(
         None,
@@ -1035,7 +1079,7 @@ def prepare_scraping(
 
     sample_mode = "full"
     working_df = active_df
-    effective_seed = subset_seed
+    effective_seed: int | str = "-"
 
     if org_id:
         selected_org_id = org_id.strip()
@@ -1086,9 +1130,14 @@ def prepare_scraping(
             )
             working_df = active_df.sample(n=1, random_state=effective_seed)
     elif subset:
+        import random
+
         sample_mode = "subset"
         count = min(subset_size, len(working_df))
-        working_df = working_df.sample(n=count, random_state=subset_seed)
+        effective_seed = (
+            subset_seed if subset_seed is not None else random.SystemRandom().randrange(1, 10**9)
+        )
+        working_df = working_df.sample(n=count, random_state=effective_seed)
 
     if not debug_sample and working_df.empty:
         console.print("[yellow]No pending organizations for prepare-scraping.[/yellow]")
@@ -1296,6 +1345,11 @@ def scrape(
         "--refresh-existing",
         help="Re-scrape organizations that already have saved pages.",
     ),
+    reset: bool = typer.Option(
+        False,
+        "--reset",
+        help="Delete all existing scrape outputs (pages + scrape manifests) and exit.",
+    ),
     subset: bool = typer.Option(
         False,
         "--subset",
@@ -1307,10 +1361,10 @@ def scrape(
         "-n",
         help="Number of organizations to include when --subset is enabled.",
     ),
-    subset_seed: int = typer.Option(
-        42,
+    subset_seed: int | None = typer.Option(
+        None,
         "--subset-seed",
-        help="Random seed used for --subset sampling.",
+        help="Optional random seed used for --subset sampling (default: random each run).",
     ),
     debug_sample: bool = typer.Option(
         False,
@@ -1351,8 +1405,48 @@ def scrape(
 
     settings = load_settings()
     _setup_logging(settings.log_level)
+    scrape_logger = logging.getLogger("benefind.scrape")
+    if verbose:
+        scrape_logger.setLevel(logging.INFO)
+    else:
+        scrape_logger.setLevel(logging.WARNING)
 
     from benefind.prepare_scraping import _now_iso, build_prepare_input_signature, load_org_targets
+
+    if reset:
+        orgs_dir = DATA_DIR / "orgs"
+        if not orgs_dir.exists():
+            console.print("[yellow]No org data directory found; nothing to reset.[/yellow]")
+            return
+
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            print_error("--reset requires interactive confirmation (y/N).")
+            raise typer.Exit(code=1)
+
+        console.print(
+            make_panel(
+                "[bold red]This will permanently delete all scrape outputs[/bold red]\n"
+                "(per-org `pages/` and `scrape/` directories).\n\n"
+                "[bold yellow]`scrape_prep/` data is kept.[/bold yellow]",
+                "Scrape Reset Confirmation",
+                border_style="red",
+            )
+        )
+        if not confirm("Delete all scraped content?", default=False):
+            console.print("[yellow]Scrape reset cancelled.[/yellow]")
+            return
+
+        removed_files, removed_dirs, orgs_touched = _reset_scrape_artifacts(orgs_dir)
+        print_summary(
+            "Scrape Reset Complete",
+            [
+                ("Organizations cleaned", orgs_touched),
+                ("Files removed", removed_files),
+                ("Directories removed", removed_dirs),
+                ("Kept", "scrape_prep artifacts"),
+            ],
+        )
+        return
 
     input_path = input_file or (DATA_DIR / "filtered" / "organizations_scrape_prep.csv")
     if not input_path.exists():
@@ -1479,10 +1573,14 @@ def scrape(
             )
             selected_df = prep_ready_df.sample(n=1, random_state=effective_seed)
     elif subset:
+        import random
+
         sample_mode = "subset"
         count = min(subset_size, len(prep_ready_df))
-        selected_df = prep_ready_df.sample(n=count, random_state=subset_seed)
-        effective_seed = subset_seed
+        effective_seed = (
+            subset_seed if subset_seed is not None else random.SystemRandom().randrange(1, 10**9)
+        )
+        selected_df = prep_ready_df.sample(n=count, random_state=effective_seed)
 
     if selected_df.empty:
         console.print("[yellow]No organizations selected for scraping.[/yellow]")
@@ -1580,7 +1678,11 @@ def scrape(
     failed = 0
     skipped_existing = 0
     skipped_no_targets = 0
+    url_attempted = 0
+    url_successful = 0
+    url_failed = 0
     failure_reason_counts: dict[str, int] = {}
+    quality_counts: dict[str, int] = {}
     scrape_run_id = datetime.now(UTC).isoformat(timespec="seconds")
 
     print_summary(
@@ -1605,12 +1707,22 @@ def scrape(
                 count or 0
             )
 
-    def _process_row(position: int, row) -> tuple[int, int, int, str, str, dict[str, int]]:
+    def _merge_quality_counts(counts: dict[str, int]) -> None:
+        for quality, count in sorted(counts.items()):
+            quality_text = str(quality or "").strip()
+            if not quality_text:
+                continue
+            quality_counts[quality_text] = quality_counts.get(quality_text, 0) + int(count or 0)
+
+    def _process_row(
+        position: int,
+        row,
+    ) -> tuple[int, int, int, str, str, dict[str, int], dict[str, int], int, int, int]:
         org_id = str(row.get("_org_id", "") or "").strip()
         name = str(row.get("_org_name", "Unknown")).strip() or "Unknown"
         targets_file_raw = str(row.get("_scrape_targets_file", "") or "").strip()
         if not targets_file_raw:
-            return 0, 0, 1, name, "missing_targets_file", {}
+            return 0, 0, 1, name, "missing_targets_file", {}, {}, 0, 0, 0
 
         targets_path = Path(targets_file_raw)
         if not targets_path.is_absolute():
@@ -1618,7 +1730,7 @@ def scrape(
 
         urls = load_org_targets(targets_path)
         if not urls:
-            return 0, 0, 1, name, "missing_or_empty_targets", {}
+            return 0, 0, 1, name, "missing_or_empty_targets", {}, {}, 0, 0, 0
 
         result = scrape_organization_urls(
             org_id,
@@ -1630,7 +1742,7 @@ def scrape(
         )
 
         if result.attempted_count == 0 and result.skipped_success_count > 0:
-            return 0, 1, 0, name, "already_success", {}
+            return 0, 1, 0, name, "already_success", {}, {}, 0, 0, 0
         if result.success_count > 0:
             return (
                 1,
@@ -1639,6 +1751,10 @@ def scrape(
                 name,
                 f"success:{result.success_count}/{result.attempted_count}",
                 result.failure_reason_counts,
+                result.content_quality_counts,
+                result.attempted_count,
+                result.success_count,
+                result.failed_count,
             )
         return (
             0,
@@ -1647,6 +1763,10 @@ def scrape(
             name,
             f"failed:{result.failed_count}/{result.attempted_count}",
             result.failure_reason_counts,
+            result.content_quality_counts,
+            result.attempted_count,
+            result.success_count,
+            result.failed_count,
         )
 
     progress = Progress(
@@ -1688,6 +1808,10 @@ def scrape(
                     name,
                     note,
                     reason_counts,
+                    row_quality_counts,
+                    row_url_attempted,
+                    row_url_successful,
+                    row_url_failed,
                 ) = _process_row(i, row)
                 if verbose:
                     console.print(f"[dim][{i}/{len(selected_rows)}][/dim] {name} [{note}]")
@@ -1695,7 +1819,11 @@ def scrape(
                 success += one_success
                 skipped_existing += one_skipped
                 skipped_no_targets += one_no_targets
+                url_attempted += row_url_attempted
+                url_successful += row_url_successful
+                url_failed += row_url_failed
                 _merge_failure_reasons(reason_counts)
+                _merge_quality_counts(row_quality_counts)
                 if one_success == 0 and one_skipped == 0 and one_no_targets == 0:
                     failed += 1
 
@@ -1712,9 +1840,18 @@ def scrape(
                 for future in as_completed(futures):
                     i = futures[future]
                     try:
-                        one_success, one_skipped, one_no_targets, name, note, reason_counts = (
-                            future.result()
-                        )
+                        (
+                            one_success,
+                            one_skipped,
+                            one_no_targets,
+                            name,
+                            note,
+                            reason_counts,
+                            row_quality_counts,
+                            row_url_attempted,
+                            row_url_successful,
+                            row_url_failed,
+                        ) = future.result()
                     except Exception as exc:
                         failed += 1
                         failure_reason_counts["worker_exception"] = (
@@ -1736,7 +1873,11 @@ def scrape(
                     success += one_success
                     skipped_existing += one_skipped
                     skipped_no_targets += one_no_targets
+                    url_attempted += row_url_attempted
+                    url_successful += row_url_successful
+                    url_failed += row_url_failed
                     _merge_failure_reasons(reason_counts)
+                    _merge_quality_counts(row_quality_counts)
                     if one_success == 0 and one_skipped == 0 and one_no_targets == 0:
                         failed += 1
 
@@ -1746,19 +1887,27 @@ def scrape(
     print_summary(
         "Scrape Results",
         [
-            ("Scraped now", success),
-            ("Failed now", failed),
-            ("Skipped existing", skipped_existing),
+            ("Organizations scraped", success),
+            ("Organizations failed", failed),
+            ("URLs attempted", url_attempted),
+            ("URLs successful", url_successful),
+            ("URLs failed", url_failed),
+            ("URLs low quality", quality_counts.get("low", 0)),
+            ("Skipped existing orgs", skipped_existing),
             ("Skipped missing targets", skipped_no_targets),
             ("Skipped excluded", skipped_excluded),
-            ("Failure reason codes", len(failure_reason_counts)),
+            ("URL failure reason codes", len(failure_reason_counts)),
         ],
     )
     if failure_reason_counts:
         reason_lines = [
             f"{reason}: {count}" for reason, count in sorted(failure_reason_counts.items())
         ]
-        console.print(make_panel("\n".join(reason_lines), "Failure reason distribution"))
+        console.print(make_panel("\n".join(reason_lines), "URL failure reason distribution"))
+
+    if quality_counts:
+        quality_lines = [f"{quality}: {count}" for quality, count in sorted(quality_counts.items())]
+        console.print(make_panel("\n".join(quality_lines), "Content quality distribution"))
 
 
 @app.command()
