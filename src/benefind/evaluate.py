@@ -107,6 +107,7 @@ def ask_llm(
 
 
 def evaluate_organization(
+    org_id: str,
     org_name: str,
     org_location: str,
     org_purpose: str,
@@ -125,6 +126,7 @@ def evaluate_organization(
         logger.warning("No scraped content for %s, evaluation will be limited.", org_name)
 
     results = {
+        "_org_id": org_id,
         "_org_name": org_name,
         "_org_location": org_location,
         "_org_purpose": org_purpose,
@@ -174,8 +176,6 @@ def evaluate_batch(
     Expects each org dict to have a '_website_url' key and an org directory
     already created by the scraper.
     """
-    from benefind.scrape import _slugify
-
     openai_api_key = os.environ.get("OPENAI_API_KEY", "")
     if not openai_api_key:
         raise ExternalApiAccessError(
@@ -191,17 +191,22 @@ def evaluate_batch(
         name = org.get(name_column, "")
         location = org.get(location_column, "")
         purpose = org.get(purpose_column, "")
-        slug = _slugify(name)
-        org_dir = DATA_DIR / "orgs" / slug
+        org_id = str(org.get("_org_id", "") or "").strip()
+        org_dir = DATA_DIR / "orgs" / org_id if org_id else None
 
         logger.info("[%d/%d] Evaluating: %s", i + 1, len(organizations), name)
 
-        if not org_dir.exists():
-            logger.warning("No scraped data for %s, skipping evaluation.", name)
-            results.append({"_org_name": name, "_error": "no_scraped_data"})
+        if not org_id:
+            logger.warning("Missing _org_id for %s, skipping evaluation.", name)
+            results.append({"_org_name": name, "_error": "missing_org_id"})
             continue
 
-        result = evaluate_organization(name, location, purpose, org_dir, settings, client)
+        if not org_dir or not org_dir.exists():
+            logger.warning("No scraped data for %s, skipping evaluation.", name)
+            results.append({"_org_id": org_id, "_org_name": name, "_error": "no_scraped_data"})
+            continue
+
+        result = evaluate_organization(org_id, name, location, purpose, org_dir, settings, client)
         results.append(result)
 
     return results

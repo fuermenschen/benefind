@@ -16,6 +16,7 @@ from benefind.cli_ui import (
     C_SCORE_LOW,
     C_SCORE_MED,
     ReviewProgress,
+    ask_select,
     ask_text,
     clear,
     confirm,
@@ -37,6 +38,11 @@ from benefind.exclusion_reasons import (
     EXCLUDE_REASON_OPTIONS,
     ExcludeReason,
     has_exclusion_reason,
+)
+from benefind.prepare_scraping import (
+    PrepareCheckpointWriter,
+    load_prepare_summary,
+    prepare_scraping_batch,
 )
 
 LOCATION_DECISIONS_PATH = DATA_DIR / "filtered" / "location_review_decisions.csv"
@@ -94,6 +100,17 @@ _URL_NORM_ACTIONS = [
     ("q", "Quit"),
 ]
 _URL_NORM_VALID_KEYS = [k for k, _ in _URL_NORM_ACTIONS] + ["esc"]
+
+# Key bindings for scrape readiness review
+_SCRAPE_READINESS_ACTIONS = [
+    ("r", "Retry prepare"),
+    ("u", "Set final URL"),
+    ("x", "Exclude org"),
+    ("d", "Defer"),
+    ("s", "Skip"),
+    ("q", "Quit"),
+]
+_SCRAPE_READINESS_VALID_KEYS = [k for k, _ in _SCRAPE_READINESS_ACTIONS] + ["esc"]
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +184,304 @@ def _open_review_search(name: str, location: str, engine: str) -> tuple[bool, st
     except webbrowser.Error:
         return False, url
     return bool(opened), url
+
+
+def _is_scrape_readiness_critical(row: pd.Series) -> bool:
+    status = str(row.get("_scrape_prep_status", "") or "").strip().lower()
+    robots_fetch = str(row.get("_scrape_robots_fetch", "") or "").strip().lower()
+    return status == "blocked" or (status == "no_urls" and robots_fetch == "seed_unreachable")
+
+
+def _ensure_scrape_readiness_columns(df: pd.DataFrame) -> pd.DataFrame:
+    defaults = {
+        "_scrape_input_signature": "",
+        "_scrape_requires_reprepare": False,
+        "_scrape_signature_checked_at": "",
+        "_scrape_readiness_status": "",
+        "_scrape_readiness_reason": "",
+        "_scrape_readiness_note": "",
+        "_scrape_readiness_reviewed_at": "",
+    }
+    for column, default in defaults.items():
+        if column not in df.columns:
+            df[column] = default
+
+    # Normalize stale marker to bool for consistent downstream checks.
+    df["_scrape_requires_reprepare"] = df["_scrape_requires_reprepare"].apply(
+        lambda value: str(value or "").strip().lower() in {"1", "true", "yes", "y"}
+    )
+
+    # Keep readiness text columns writable as plain object dtypes.
+    for col in [
+        "_scrape_input_signature",
+        "_scrape_signature_checked_at",
+        "_scrape_readiness_status",
+        "_scrape_readiness_reason",
+        "_scrape_readiness_note",
+        "_scrape_readiness_reviewed_at",
+    ]:
+        df[col] = df[col].astype(object).where(df[col].notna(), "")
+
+    df["_scrape_readiness_status"] = df["_scrape_readiness_status"].apply(
+        lambda value: "" if pd.isna(value) else str(value).strip().lower()
+    )
+
+    for idx, row in df.iterrows():
+        current = str(row.get("_scrape_readiness_status", "") or "").strip().lower()
+        if current:
+            continue
+        df.at[idx, "_scrape_readiness_status"] = (
+            "pending" if _is_scrape_readiness_critical(row) else "not_required"
+        )
+
+    return df
+
+
+def _scrape_readiness_queue_org_ids(df: pd.DataFrame) -> list[str]:
+    deduped = df.drop_duplicates(subset="_org_id", keep="last")
+    queue: list[str] = []
+    for _, row in deduped.iterrows():
+        org_id = str(row.get("_org_id", "") or "").strip()
+        if not org_id:
+            continue
+        readiness_status = str(row.get("_scrape_readiness_status", "") or "").strip().lower()
+        if readiness_status in {"approved", "excluded", "not_required"}:
+            continue
+        if _is_scrape_readiness_critical(row):
+            queue.append(org_id)
+    return queue
+
+
+def _scrape_readiness_org_panel(
+    org_name: str,
+    org_id: str,
+    position: int,
+    total: int,
+) -> None:
+    rows = [
+        ("Name", f"[{C_PRIMARY}]{org_name}[/{C_PRIMARY}]"),
+        ("Org ID", f"[{C_MUTED}]{org_id}[/{C_MUTED}]"),
+    ]
+    table = make_kv_table(rows)
+    console.print(
+        make_panel(table, f"Scrape Readiness  [{C_MUTED}]{position}/{total}[/{C_MUTED}]")
+    )
+
+
+def _scrape_readiness_info_panel(row: pd.Series) -> None:
+    try:
+        prepared_count = int(float(row.get("_scrape_prepared_url_count", 0) or 0))
+    except (TypeError, ValueError):
+        prepared_count = 0
+
+    rows = [
+        ("Prep status", str(row.get("_scrape_prep_status", "") or "-")),
+        ("Robots fetch", str(row.get("_scrape_robots_fetch", "") or "-")),
+        ("Robots policy", str(row.get("_scrape_robots_policy", "") or "-")),
+        ("Seed", fmt_url(str(row.get("_scrape_seed_normalized", "") or ""))),
+        ("Website URL", fmt_url(str(row.get("_website_url", "") or ""))),
+        ("Targets count", str(prepared_count)),
+        (
+            "Readiness",
+            str(row.get("_scrape_readiness_status", "") or "not_required"),
+        ),
+        (
+            "Prep error",
+            f"[{C_MUTED}]{str(row.get('_scrape_prep_error', '') or '-')[:180]}[/{C_MUTED}]",
+        ),
+    ]
+    table = make_kv_table(rows)
+    console.print(make_panel(table, "Prep Diagnostics"))
+
+
+def _scrape_readiness_actions_panel() -> None:
+    console.print(make_panel(make_actions_table(_SCRAPE_READINESS_ACTIONS), "Actions"))
+
+
+def _prompt_exclusion_reason() -> tuple[ExcludeReason, str] | None:
+    choices = [
+        (f"{option.label} [{option.reason.value}]", option.reason.value)
+        for option in EXCLUDE_REASON_OPTIONS
+    ]
+    selected = ask_select(
+        "Exclude reason",
+        choices,
+        default_value=ExcludeReason.NO_INFORMATION.value,
+    )
+    if not selected:
+        print_warning("No exclusion reason selected.")
+        return None
+
+    reason = ExcludeReason(selected)
+
+    note = ""
+    if reason is ExcludeReason.OTHER:
+        note = ask_text("Reason note (required)")
+        if not str(note or "").strip():
+            print_warning("Reason note is required for OTHER.")
+            return None
+    return reason, str(note or "").strip()
+
+
+def _load_latest_websites_df(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    if "_org_id" not in df.columns:
+        raise ValueError("Live websites CSV missing _org_id")
+
+    string_columns = [
+        "_excluded_reason",
+        "_excluded_reason_note",
+        "_excluded_at",
+        "_website_url_final",
+        "_website_origin",
+        "_website_url_norm_reviewed_at",
+    ]
+    for column in string_columns:
+        if column not in df.columns:
+            df[column] = ""
+
+    for column in string_columns:
+        # Keep writable object dtype so interactive assignments never fail due to
+        # strict inferred dtypes (float/string extension types from CSV inference).
+        df[column] = df[column].astype(object).where(df[column].notna(), "")
+
+    if "_website_needs_review" not in df.columns:
+        df["_website_needs_review"] = False
+    df["_website_needs_review"] = df["_website_needs_review"].apply(_is_true)
+
+    df = df.drop_duplicates(subset="_org_id", keep="last")
+    return df
+
+
+def _upsert_websites_row(
+    websites_df: pd.DataFrame,
+    org_id: str,
+    updates: dict[str, object],
+) -> pd.DataFrame:
+    org_mask = websites_df["_org_id"].astype(str).str.strip() == org_id
+    if not org_mask.any():
+        row = {column: "" for column in websites_df.columns}
+        row["_org_id"] = org_id
+        for key, value in updates.items():
+            if key not in row:
+                websites_df[key] = ""
+                row[key] = ""
+            row[key] = value
+        websites_df = pd.concat([websites_df, pd.DataFrame([row])], ignore_index=True)
+        return websites_df
+
+    idx = websites_df[org_mask].index[-1]
+    for key, value in updates.items():
+        if key not in websites_df.columns:
+            websites_df[key] = ""
+        websites_df.at[idx, key] = value
+    return websites_df
+
+
+def _save_websites_df(websites_df: pd.DataFrame, path: Path) -> None:
+    deduped = websites_df.drop_duplicates(subset="_org_id", keep="last")
+    _save_csv_atomic(deduped, path)
+
+
+def _load_latest_prep_df(path: Path) -> pd.DataFrame:
+    prep_df = pd.read_csv(path, encoding="utf-8-sig")
+    if "_org_id" not in prep_df.columns:
+        raise ValueError("Scrape prep CSV missing _org_id")
+    prep_df = _ensure_scrape_readiness_columns(prep_df)
+    return prep_df
+
+
+def _save_prep_df(prep_df: pd.DataFrame, path: Path) -> None:
+    prep_df = prep_df.drop_duplicates(subset="_org_id", keep="last")
+    _save_csv_atomic(prep_df, path)
+
+
+def _mark_prepare_stale_for_org_ids(org_ids: set[str], reason: str) -> int:
+    """Mark existing scrape-prepare rows as stale for given org IDs."""
+    if not org_ids:
+        return 0
+
+    prep_path = DATA_DIR / "filtered" / "organizations_scrape_prep.csv"
+    if not prep_path.exists():
+        return 0
+
+    prep_df = _load_latest_prep_df(prep_path)
+    mask = prep_df["_org_id"].astype(str).str.strip().isin(org_ids)
+    if not mask.any():
+        return 0
+
+    timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+    prep_df.loc[mask, "_scrape_requires_reprepare"] = True
+    prep_df.loc[mask, "_scrape_signature_checked_at"] = timestamp
+    empty_reason_mask = (
+        prep_df["_scrape_readiness_reason"].astype(str).str.strip() == ""
+    ) & mask
+    prep_df.loc[empty_reason_mask, "_scrape_readiness_reason"] = reason
+
+    _save_prep_df(prep_df, prep_path)
+    return int(mask.sum())
+
+
+def _update_prep_readiness(
+    prep_path: Path,
+    org_id: str,
+    *,
+    status: str,
+    reason: str,
+    note: str,
+) -> pd.Series | None:
+    prep_df = _load_latest_prep_df(prep_path)
+    mask = prep_df["_org_id"].astype(str).str.strip() == org_id
+    if not mask.any():
+        return None
+
+    idx = prep_df[mask].index[-1]
+    timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+    prep_df.at[idx, "_scrape_readiness_status"] = status
+    prep_df.at[idx, "_scrape_readiness_reason"] = reason
+    prep_df.at[idx, "_scrape_readiness_note"] = note
+    prep_df.at[idx, "_scrape_readiness_reviewed_at"] = timestamp
+    _save_prep_df(prep_df, prep_path)
+    return prep_df.loc[idx]
+
+
+def _run_prepare_for_org(
+    org_id: str,
+    websites_df: pd.DataFrame,
+    prep_path: Path,
+) -> tuple[dict | None, str]:
+    settings = load_settings()
+    mask = websites_df["_org_id"].astype(str).str.strip() == org_id
+    if not mask.any():
+        return None, "Organization is missing in websites CSV"
+
+    row = websites_df[mask].iloc[-1]
+    if has_exclusion_reason(row.get("_excluded_reason", "")):
+        return None, "Organization is excluded. Unexclude before retrying prepare."
+
+    if "_website_url_final" not in websites_df.columns:
+        return None, "_website_url_final is missing. Run URL normalization review first."
+
+    name_col = _detect_first_column(websites_df, NAME_COLUMN_CANDIDATES, default="_org_name")
+    org_record = row.to_dict()
+    if not str(org_record.get(name_col, "") or "").strip():
+        org_record[name_col] = str(org_record.get("_org_name", "") or "").strip() or "Unknown"
+
+    existing_rows, _ = load_prepare_summary(prep_path)
+    writer = PrepareCheckpointWriter(prep_path, existing_rows=existing_rows)
+
+    summaries = prepare_scraping_batch(
+        [org_record],
+        settings,
+        org_id_column="_org_id",
+        name_column=name_col,
+        website_column="_website_url_final",
+        on_result=lambda summary, targets: writer.upsert(summary, targets),
+        log_progress=False,
+    )
+    if not summaries:
+        return None, "Prepare returned no summary"
+    return summaries[0], ""
 
 
 def _save_location_decisions(
@@ -508,8 +823,19 @@ def review_websites() -> None:
     for column in required_columns:
         if column not in df.columns:
             df[column] = ""
-    for column in ["_excluded_reason", "_excluded_reason_note", "_excluded_at"]:
-        df[column] = df[column].fillna("").astype("object")
+
+    text_columns = [
+        "_website_url",
+        "_website_confidence",
+        "_website_source",
+        "_website_origin",
+        "_excluded_reason",
+        "_excluded_reason_note",
+        "_excluded_at",
+    ]
+    for column in text_columns:
+        df[column] = df[column].astype(object).where(df[column].notna(), "")
+    df["_website_needs_review"] = df["_website_needs_review"].apply(_is_true)
 
     excluded_mask = df["_excluded_reason"].apply(has_exclusion_reason)
     no_website_mask = df["_website_url"].isna() | (df["_website_url"].astype(str).str.strip() == "")
@@ -535,6 +861,7 @@ def review_websites() -> None:
     for position, idx in enumerate(queue_indices, start=1):
         progress.current = position - 1
         row = df.loc[idx]
+        org_id = str(row.get("_org_id", "") or "").strip()
         name = str(row.get(name_col, "Unknown")) if name_col else "Unknown"
         location = str(row.get(location_col, "Unknown")) if location_col else "Unknown"
         current_url = str(row.get("_website_url", "") or "").strip()
@@ -624,6 +951,7 @@ def review_websites() -> None:
                     accepted_llm += 1
                     progress.mark_accepted()
                     _save_csv_atomic(df, input_path)
+                    _mark_prepare_stale_for_org_ids({org_id}, "website_url_changed")
                     print_success(f"Accepted LLM URL: {llm_url}")
                 else:
                     print_skip("Cancelled — skipped")
@@ -649,6 +977,7 @@ def review_websites() -> None:
                     entered_manually += 1
                     progress.mark_accepted()
                     _save_csv_atomic(df, input_path)
+                    _mark_prepare_stale_for_org_ids({org_id}, "website_url_changed")
                     print_success(f"Set to: {url}")
                 else:
                     print_skip("Cancelled — skipped")
@@ -671,6 +1000,7 @@ def review_websites() -> None:
                     df.at[idx, "_excluded_at"] = timestamp
                     progress.mark_excluded()
                     _save_csv_atomic(df, input_path)
+                    _mark_prepare_stale_for_org_ids({org_id}, "website_url_changed")
                     print_success("Excluded: no information available")
                 else:
                     print_skip("Cancelled — skipped")
@@ -701,6 +1031,7 @@ def review_websites() -> None:
                     df.at[idx, "_excluded_at"] = timestamp
                     progress.mark_excluded()
                     _save_csv_atomic(df, input_path)
+                    _mark_prepare_stale_for_org_ids({org_id}, "website_url_changed")
                     print_success(f"Excluded: {label}")
                 else:
                     print_skip("Cancelled — skipped")
@@ -728,6 +1059,7 @@ def review_websites() -> None:
                     df.at[idx, "_excluded_at"] = timestamp
                     progress.mark_excluded()
                     _save_csv_atomic(df, input_path)
+                    _mark_prepare_stale_for_org_ids({org_id}, "website_url_changed")
                     print_success(f"Excluded (Other): {note}")
                 else:
                     print_skip("Cancelled — skipped")
@@ -938,6 +1270,7 @@ def review_url_normalization(
                 df.at[idx, final_col] = normalized_url
                 df.at[idx, reviewed_at_col] = datetime.now(UTC).isoformat(timespec="seconds")
                 _save_csv_atomic(df, file_path)
+                _mark_prepare_stale_for_org_ids({org_id}, "url_normalization_changed")
                 applied_normalized += 1
                 progress.mark_accepted()
                 print_success("Applied normalized URL")
@@ -948,6 +1281,7 @@ def review_url_normalization(
                 df.at[idx, final_col] = original_url
                 df.at[idx, reviewed_at_col] = datetime.now(UTC).isoformat(timespec="seconds")
                 _save_csv_atomic(df, file_path)
+                _mark_prepare_stale_for_org_ids({org_id}, "url_normalization_changed")
                 kept_original += 1
                 progress.mark_accepted()
                 print_success("Kept original URL")
@@ -964,6 +1298,7 @@ def review_url_normalization(
                     df.at[idx, final_col] = new_url
                     df.at[idx, reviewed_at_col] = datetime.now(UTC).isoformat(timespec="seconds")
                     _save_csv_atomic(df, file_path)
+                    _mark_prepare_stale_for_org_ids({org_id}, "url_normalization_changed")
                     progress.mark_accepted()
                     print_success("Final URL saved")
                     break
@@ -981,6 +1316,7 @@ def review_url_normalization(
                     df.at[idx, excluded_at_col] = timestamp
                     df.at[idx, reviewed_at_col] = timestamp
                     _save_csv_atomic(df, file_path)
+                    _mark_prepare_stale_for_org_ids({org_id}, "url_normalization_changed")
                     excluded += 1
                     progress.mark_excluded()
                     print_success("Excluded: no information available")
@@ -1009,6 +1345,7 @@ def review_url_normalization(
                     df.at[idx, excluded_at_col] = timestamp
                     df.at[idx, reviewed_at_col] = timestamp
                     _save_csv_atomic(df, file_path)
+                    _mark_prepare_stale_for_org_ids({org_id}, "url_normalization_changed")
                     excluded += 1
                     progress.mark_excluded()
                     print_success(f"Excluded: {label}")
@@ -1031,6 +1368,7 @@ def review_url_normalization(
                     df.at[idx, excluded_at_col] = timestamp
                     df.at[idx, reviewed_at_col] = timestamp
                     _save_csv_atomic(df, file_path)
+                    _mark_prepare_stale_for_org_ids({org_id}, "url_normalization_changed")
                     excluded += 1
                     progress.mark_excluded()
                     print_success(f"Excluded (Other): {reason_text}")
@@ -1059,6 +1397,7 @@ def review_url_normalization(
                     df.at[idx, excluded_note_col] = ""
                     df.at[idx, excluded_at_col] = ""
                     _save_csv_atomic(df, file_path)
+                    _mark_prepare_stale_for_org_ids({org_id}, "url_normalization_changed")
                     cleared += 1
                     progress.mark_skipped()
                     print_success("Cleared decision")
@@ -1095,5 +1434,275 @@ def review_url_normalization(
         "applied_normalized": applied_normalized,
         "kept_original": kept_original,
         "excluded": excluded,
+        "remaining": remaining,
+    }
+
+
+def review_scrape_readiness() -> dict[str, int]:
+    """Review blocked or seed-unreachable scrape prep rows before scraping."""
+    prep_path = DATA_DIR / "filtered" / "organizations_scrape_prep.csv"
+    websites_path = DATA_DIR / "filtered" / "organizations_with_websites.csv"
+
+    if not prep_path.exists():
+        console.print(f"[yellow]No file found at {prep_path}[/yellow]")
+        console.print("Run [bold]benefind prepare-scraping[/bold] first.")
+        return {"approved": 0, "excluded": 0, "deferred": 0, "remaining": 0}
+
+    if not websites_path.exists():
+        console.print(f"[yellow]No file found at {websites_path}[/yellow]")
+        console.print("Run [bold]benefind discover[/bold] first.")
+        return {"approved": 0, "excluded": 0, "deferred": 0, "remaining": 0}
+
+    try:
+        prep_df = _load_latest_prep_df(prep_path)
+    except ValueError as e:
+        print_warning(str(e))
+        return {"approved": 0, "excluded": 0, "deferred": 0, "remaining": 0}
+
+    queue_org_ids = _scrape_readiness_queue_org_ids(prep_df)
+    if not queue_org_ids:
+        console.print("[green]No scrape-readiness rows pending review.[/green]")
+        return {"approved": 0, "excluded": 0, "deferred": 0, "remaining": 0}
+
+    progress = ReviewProgress(total=len(queue_org_ids))
+    approved = 0
+    excluded = 0
+    deferred = 0
+    quit_requested = False
+
+    for position, org_id in enumerate(queue_org_ids, start=1):
+        progress.current = position - 1
+
+        while True:
+            prep_df = _load_latest_prep_df(prep_path)
+            mask = prep_df["_org_id"].astype(str).str.strip() == org_id
+            if not mask.any():
+                print_warning(f"_org_id {org_id} no longer present in prep CSV. Skipping.")
+                progress.mark_skipped()
+                break
+
+            row = prep_df[mask].iloc[-1]
+            if not _is_scrape_readiness_critical(row):
+                _update_prep_readiness(
+                    prep_path,
+                    org_id,
+                    status="approved",
+                    reason="critical_status_cleared",
+                    note="",
+                )
+                approved += 1
+                progress.mark_accepted()
+                print_success("Resolved automatically after refresh")
+                break
+
+            org_name = str(row.get("_org_name", "") or "").strip() or "Unknown"
+
+            clear()
+            console.print(progress.as_panel("Scrape Readiness Review"))
+            _scrape_readiness_org_panel(org_name, org_id, position, len(queue_org_ids))
+            _scrape_readiness_info_panel(row)
+            _scrape_readiness_actions_panel()
+
+            try:
+                key = wait_for_key(_SCRAPE_READINESS_VALID_KEYS)
+            except KeyboardInterrupt:
+                quit_requested = True
+                break
+
+            if key in ("q", "esc"):
+                quit_requested = True
+                break
+
+            if key == "s":
+                print_skip("Skipped")
+                progress.mark_skipped()
+                break
+
+            if key == "d":
+                note = ask_text(
+                    "Defer note",
+                    default=str(row.get("_scrape_readiness_note", "") or ""),
+                )
+                _update_prep_readiness(
+                    prep_path,
+                    org_id,
+                    status="deferred",
+                    reason="deferred_by_user",
+                    note=str(note or "").strip(),
+                )
+                deferred += 1
+                progress.mark_skipped()
+                print_skip("Deferred")
+                break
+
+            if key == "x":
+                exclusion = _prompt_exclusion_reason()
+                if exclusion is None:
+                    continue
+                reason, note = exclusion
+                if not confirm(f"Exclude '{org_name}' with reason {reason.value}?", default=False):
+                    print_skip("Cancelled")
+                    continue
+
+                websites_df = _load_latest_websites_df(websites_path)
+                timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+                websites_df = _upsert_websites_row(
+                    websites_df,
+                    org_id,
+                    {
+                        "_excluded_reason": reason.value,
+                        "_excluded_reason_note": note,
+                        "_excluded_at": timestamp,
+                        "_website_origin": "manual_excluded",
+                        "_website_needs_review": False,
+                    },
+                )
+                _save_websites_df(websites_df, websites_path)
+
+                _update_prep_readiness(
+                    prep_path,
+                    org_id,
+                    status="excluded",
+                    reason=f"excluded:{reason.value}",
+                    note=note,
+                )
+                excluded += 1
+                progress.mark_excluded()
+                print_success(f"Excluded: {reason.value}")
+                break
+
+            if key == "u":
+                websites_df = _load_latest_websites_df(websites_path)
+                websites_mask = websites_df["_org_id"].astype(str).str.strip() == org_id
+                current_final = ""
+                if websites_mask.any():
+                    current_final = str(
+                        websites_df[websites_mask].iloc[-1].get("_website_url_final", "") or ""
+                    ).strip()
+                default_url = (
+                    current_final
+                    or str(row.get("_website_url", "") or "").strip()
+                    or str(row.get("_scrape_seed_original", "") or "").strip()
+                )
+                new_url = ask_text("Final website URL", default=default_url)
+                if not str(new_url or "").strip():
+                    print_skip("No URL entered")
+                    continue
+                if not confirm(f"Set final URL to {new_url}?", default=True):
+                    print_skip("Cancelled")
+                    continue
+
+                timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+                websites_df = _upsert_websites_row(
+                    websites_df,
+                    org_id,
+                    {
+                        "_website_url_final": str(new_url).strip(),
+                        "_excluded_reason": "",
+                        "_excluded_reason_note": "",
+                        "_excluded_at": "",
+                        "_website_origin": "manual",
+                        "_website_needs_review": False,
+                        "_website_url_norm_reviewed_at": timestamp,
+                    },
+                )
+                _save_websites_df(websites_df, websites_path)
+
+                summary, error = _run_prepare_for_org(org_id, websites_df, prep_path)
+                if error:
+                    print_warning(error)
+                    _update_prep_readiness(
+                        prep_path,
+                        org_id,
+                        status="pending",
+                        reason="manual_final_url_prepare_error",
+                        note=error,
+                    )
+                    continue
+
+                if str(summary.get("_scrape_prep_status", "") or "").strip().lower() == "ready":
+                    _update_prep_readiness(
+                        prep_path,
+                        org_id,
+                        status="approved",
+                        reason="manual_final_url_ready",
+                        note="",
+                    )
+                    approved += 1
+                    progress.mark_accepted()
+                    print_success("Final URL accepted and prepare is ready")
+                    break
+
+                _update_prep_readiness(
+                    prep_path,
+                    org_id,
+                    status="pending",
+                    reason="manual_final_url_still_unresolved",
+                    note=str(summary.get("_scrape_prep_error", "") or "").strip(),
+                )
+                print_warning("Still unresolved after final URL update")
+                continue
+
+            if key == "r":
+                websites_df = _load_latest_websites_df(websites_path)
+                summary, error = _run_prepare_for_org(org_id, websites_df, prep_path)
+                if error:
+                    print_warning(error)
+                    _update_prep_readiness(
+                        prep_path,
+                        org_id,
+                        status="pending",
+                        reason="retry_prepare_error",
+                        note=error,
+                    )
+                    continue
+
+                if str(summary.get("_scrape_prep_status", "") or "").strip().lower() == "ready":
+                    _update_prep_readiness(
+                        prep_path,
+                        org_id,
+                        status="approved",
+                        reason="retry_prepare_ready",
+                        note="",
+                    )
+                    approved += 1
+                    progress.mark_accepted()
+                    print_success("Prepare retry resolved row")
+                    break
+
+                _update_prep_readiness(
+                    prep_path,
+                    org_id,
+                    status="pending",
+                    reason="retry_prepare_still_unresolved",
+                    note=str(summary.get("_scrape_prep_error", "") or "").strip(),
+                )
+                print_warning("Still unresolved after retry")
+                continue
+
+        if quit_requested:
+            break
+
+    final_df = _load_latest_prep_df(prep_path)
+    remaining = len(_scrape_readiness_queue_org_ids(final_df))
+
+    clear()
+    print_summary(
+        "Scrape Readiness Review Paused" if quit_requested else "Scrape Readiness Review Complete",
+        [
+            ("Approved", approved),
+            ("Excluded", excluded),
+            ("Deferred", deferred),
+            ("Skipped", progress.skipped),
+            ("Remaining in queue", remaining),
+            ("Prep file", str(prep_path)),
+            ("Websites file", str(websites_path)),
+        ],
+    )
+
+    return {
+        "approved": approved,
+        "excluded": excluded,
+        "deferred": deferred,
         "remaining": remaining,
     }

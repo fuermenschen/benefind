@@ -296,6 +296,36 @@ def _render_prepare_scraping_live_view(
     return Group(make_panel(summary, "Prepare Scraping Run"), progress)
 
 
+def _render_scrape_live_view(
+    progress: Progress,
+    *,
+    mode: str,
+    workers: int,
+    pending: int,
+    scraped_now: int,
+    failed_now: int,
+    skipped_existing: int,
+    skipped_missing_targets: int,
+    skipped_excluded: int,
+) -> Group:
+    summary = Table(show_header=False, box=None, pad_edge=False)
+    summary.add_column("key", style="dim", no_wrap=True)
+    summary.add_column("value")
+    summary.add_row("Mode", mode)
+    summary.add_row("Workers", str(workers))
+    summary.add_row("Pending", str(pending))
+    completed_parts = [
+        f"[green]{scraped_now} scraped[/green]",
+        f"[red]{failed_now} failed[/red]",
+        f"[yellow]{skipped_existing} skipped existing[/yellow]",
+        f"[dim]{skipped_missing_targets} missing targets[/dim]",
+    ]
+    summary.add_row("Completed", "  ".join(completed_parts))
+    summary.add_row("Skipped excluded", str(skipped_excluded))
+
+    return Group(make_panel(summary, "Scrape Run"), progress)
+
+
 @app.command()
 def parse(
     force_download: bool = typer.Option(
@@ -902,6 +932,11 @@ def prepare_scraping(
         "--workers",
         help="Optional override for concurrent organization prep workers.",
     ),
+    org_id: str | None = typer.Option(
+        None,
+        "--org-id",
+        help="Prepare only one organization by _org_id (forces refresh for that org).",
+    ),
 ) -> None:
     """Step 3c: Prepare scraping scope and URL targets.
 
@@ -988,6 +1023,8 @@ def prepare_scraping(
         raise typer.BadParameter("--debug-org-id requires --debug-sample.")
     if debug_sample and subset:
         raise typer.BadParameter("Use either --debug-sample or --subset, not both.")
+    if org_id and (subset or debug_sample):
+        raise typer.BadParameter("--org-id cannot be combined with --subset or --debug-sample.")
 
     name_column = _detect_first_column(
         list(df.columns),
@@ -1000,16 +1037,34 @@ def prepare_scraping(
     working_df = active_df
     effective_seed = subset_seed
 
+    if org_id:
+        selected_org_id = org_id.strip()
+        if not selected_org_id:
+            raise typer.BadParameter("--org-id cannot be empty.")
+        working_df = active_df[active_df["_org_id"].astype(str).str.strip() == selected_org_id]
+        if working_df.empty:
+            raise typer.BadParameter(
+                f"No active organization found for --org-id={selected_org_id!r}"
+            )
+        sample_mode = "org_id"
+        effective_seed = "-"
+
+    selected_scope_size = len(working_df)
+
     summary_path = summary_output or (DATA_DIR / "filtered" / "organizations_scrape_prep.csv")
     existing_rows, existing_org_ids = load_prepare_summary(summary_path)
-    if not refresh and not debug_sample:
+    effective_refresh = refresh or bool(org_id)
+    if not effective_refresh and not debug_sample:
         working_df = working_df[
             ~working_df["_org_id"].astype(str).str.strip().isin(existing_org_ids)
         ]
 
     skipped_existing = 0
     if not debug_sample:
-        skipped_existing = len(active_df) - len(working_df)
+        if sample_mode == "org_id":
+            skipped_existing = max(0, selected_scope_size - len(working_df))
+        else:
+            skipped_existing = len(active_df) - len(working_df)
 
     if debug_sample:
         import random
@@ -1055,6 +1110,7 @@ def prepare_scraping(
             ("Skipped existing", skipped_existing),
             ("Mode", sample_mode),
             ("Sampling seed", effective_seed if sample_mode in {"subset", "debug_sample"} else "-"),
+            ("Refresh existing", effective_refresh),
             ("Workers", int(settings.scraping.prepare_max_workers)),
             ("Keep ranked URLs/org", int(settings.scraping.prepare_keep_ranked_urls_per_org)),
             ("Discovery safety cap", int(settings.scraping.prepare_discovery_safety_cap)),
@@ -1240,6 +1296,47 @@ def scrape(
         "--refresh-existing",
         help="Re-scrape organizations that already have saved pages.",
     ),
+    subset: bool = typer.Option(
+        False,
+        "--subset",
+        help="Scrape only a random subset of prepared organizations.",
+    ),
+    subset_size: int = typer.Option(
+        10,
+        "--size",
+        "-n",
+        help="Number of organizations to include when --subset is enabled.",
+    ),
+    subset_seed: int = typer.Option(
+        42,
+        "--subset-seed",
+        help="Random seed used for --subset sampling.",
+    ),
+    debug_sample: bool = typer.Option(
+        False,
+        "--debug-sample",
+        help="Scrape exactly one organization as a debug sample.",
+    ),
+    debug_seed: int | None = typer.Option(
+        None,
+        "--debug-seed",
+        help="Optional random seed for reproducible debug sample selection.",
+    ),
+    debug_org_id: str | None = typer.Option(
+        None,
+        "--debug-org-id",
+        help="Target a specific _org_id in debug sample mode.",
+    ),
+    workers: int = typer.Option(
+        1,
+        "--workers",
+        help="Concurrent organization workers for scraping.",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        help="Print per-organization scrape details.",
+    ),
 ) -> None:
     """Step 3c: Scrape organization websites.
 
@@ -1250,12 +1347,12 @@ def scrape(
     import pandas as pd
 
     from benefind.config import DATA_DIR
-    from benefind.scrape import _slugify, scrape_organization_urls
+    from benefind.scrape import scrape_organization_urls
 
     settings = load_settings()
     _setup_logging(settings.log_level)
 
-    from benefind.prepare_scraping import load_org_targets
+    from benefind.prepare_scraping import _now_iso, build_prepare_input_signature, load_org_targets
 
     input_path = input_file or (DATA_DIR / "filtered" / "organizations_scrape_prep.csv")
     if not input_path.exists():
@@ -1276,6 +1373,15 @@ def scrape(
         console.print("[yellow]No prepared scrape targets found. Nothing to scrape.[/yellow]")
         return
 
+    if workers <= 0:
+        raise typer.BadParameter("--workers must be greater than 0.")
+    if subset and subset_size <= 0:
+        raise typer.BadParameter("--size/-n must be greater than 0 when --subset is used.")
+    if debug_org_id and not debug_sample:
+        raise typer.BadParameter("--debug-org-id requires --debug-sample.")
+    if subset and debug_sample:
+        raise typer.BadParameter("Use either --subset or --debug-sample, not both.")
+
     prep_ready_df = df[df["_scrape_prep_status"].astype(str).str.strip() == "ready"].copy()
     if prep_ready_df.empty:
         console.print("[yellow]No organizations with ready prepare-scraping status.[/yellow]")
@@ -1283,23 +1389,48 @@ def scrape(
 
     prep_ready_df = prep_ready_df.drop_duplicates(subset="_org_id", keep="last")
 
+    for column, default_value in [
+        ("_scrape_input_signature", ""),
+        ("_scrape_requires_reprepare", False),
+        ("_scrape_signature_checked_at", ""),
+        ("_scrape_readiness_status", "not_required"),
+    ]:
+        if column not in df.columns:
+            df[column] = default_value
+
+    text_scrape_cols = [
+        "_scrape_input_signature",
+        "_scrape_signature_checked_at",
+        "_scrape_readiness_status",
+    ]
+    for column in text_scrape_cols:
+        df[column] = df[column].astype(object).where(df[column].notna(), "")
+
+    df["_scrape_requires_reprepare"] = df["_scrape_requires_reprepare"].apply(_is_truthy_text)
+
     excluded_org_ids: set[str] = set()
     live_websites_path = DATA_DIR / "filtered" / "organizations_with_websites.csv"
     if live_websites_path.exists():
         live_df = pd.read_csv(live_websites_path, encoding="utf-8-sig")
-        if "_org_id" in live_df.columns:
-            if "_excluded_reason" not in live_df.columns:
-                live_df["_excluded_reason"] = ""
-            live_excluded_mask = has_exclusion_reason_series(live_df["_excluded_reason"])
-            excluded_org_ids = {
-                str(value).strip()
-                for value in live_df.loc[live_excluded_mask, "_org_id"].tolist()
-                if str(value).strip()
-            }
+        if "_org_id" not in live_df.columns:
+            raise typer.BadParameter(
+                "Live websites CSV has no _org_id column. "
+                "Run discover/normalize/review steps before scraping."
+            )
+
+        live_df = live_df.drop_duplicates(subset="_org_id", keep="last")
+        if "_excluded_reason" not in live_df.columns:
+            live_df["_excluded_reason"] = ""
+        live_excluded_mask = has_exclusion_reason_series(live_df["_excluded_reason"])
+        excluded_org_ids = {
+            str(value).strip()
+            for value in live_df.loc[live_excluded_mask, "_org_id"].tolist()
+            if str(value).strip()
+        }
     else:
-        console.print(
-            "[yellow]Live exclusion source not found:[/yellow] "
-            f"{live_websites_path}. Scrape exclusion sync skipped."
+        raise typer.BadParameter(
+            f"Live websites source not found: {live_websites_path}. "
+            "Run discover/normalize/review steps before scraping."
         )
 
     before_exclusion_filter = len(prep_ready_df)
@@ -1325,18 +1456,161 @@ def scrape(
         )
         return
 
+    sample_mode = "full"
+    effective_seed: int | str = "-"
+    selected_df = prep_ready_df
+
+    if debug_sample:
+        import random
+
+        sample_mode = "debug_sample"
+        if debug_org_id:
+            selected_df = prep_ready_df[
+                prep_ready_df["_org_id"].astype(str).str.strip() == debug_org_id.strip()
+            ]
+            if selected_df.empty:
+                raise typer.BadParameter(
+                    f"No prepared organization found for --debug-org-id={debug_org_id!r}"
+                )
+            effective_seed = "-"
+        else:
+            effective_seed = (
+                debug_seed if debug_seed is not None else random.SystemRandom().randrange(1, 10**9)
+            )
+            selected_df = prep_ready_df.sample(n=1, random_state=effective_seed)
+    elif subset:
+        sample_mode = "subset"
+        count = min(subset_size, len(prep_ready_df))
+        selected_df = prep_ready_df.sample(n=count, random_state=subset_seed)
+        effective_seed = subset_seed
+
+    if selected_df.empty:
+        console.print("[yellow]No organizations selected for scraping.[/yellow]")
+        return
+
+    if "_website_url_final" not in live_df.columns:
+        raise typer.BadParameter(
+            "Live websites CSV has no _website_url_final column. "
+            "Run normalize-urls + review-url-normalization before scraping."
+        )
+
+    live_by_org_id = {
+        str(row["_org_id"]).strip(): row
+        for _, row in live_df.iterrows()
+        if str(row.get("_org_id", "")).strip()
+    }
+
+    stale_org_ids: list[str] = []
+    stale_reasons: dict[str, list[str]] = {}
+    checked_at = _now_iso()
+    signatures_backfilled = 0
+    for prep_index, prep_row in selected_df.iterrows():
+        org_id = str(prep_row.get("_org_id", "") or "").strip()
+        reasons: list[str] = []
+
+        live_row = live_by_org_id.get(org_id)
+        if live_row is None:
+            reasons.append("missing_live_row")
+        else:
+            expected_signature = build_prepare_input_signature(
+                live_row.to_dict(),
+                settings,
+                website_column="_website_url_final",
+            )
+            current_signature = _text_or_empty(prep_row.get("_scrape_input_signature", ""))
+            if not current_signature:
+                df.at[prep_index, "_scrape_input_signature"] = expected_signature
+                signatures_backfilled += 1
+            elif current_signature != expected_signature:
+                reasons.append("signature_mismatch")
+
+        readiness_status = str(prep_row.get("_scrape_readiness_status", "") or "").strip().lower()
+        if readiness_status in {"pending", "deferred"}:
+            reasons.append(f"readiness_{readiness_status}")
+
+        targets_file_raw = str(prep_row.get("_scrape_targets_file", "") or "").strip()
+        if not targets_file_raw:
+            reasons.append("missing_targets_file")
+        else:
+            targets_path = Path(targets_file_raw)
+            if not targets_path.is_absolute():
+                targets_path = (DATA_DIR.parent / targets_path).resolve()
+            targets = load_org_targets(targets_path)
+            if not targets:
+                reasons.append("missing_or_empty_targets")
+
+        df.at[prep_index, "_scrape_signature_checked_at"] = checked_at
+        if reasons:
+            df.at[prep_index, "_scrape_requires_reprepare"] = True
+            stale_org_ids.append(org_id)
+            stale_reasons[org_id] = reasons
+        else:
+            df.at[prep_index, "_scrape_requires_reprepare"] = False
+
+    df.to_csv(input_path, index=False, encoding="utf-8-sig")
+
+    if stale_org_ids:
+        unique_stale_org_ids = sorted(set(stale_org_ids))
+        stale_preview = []
+        for org_id in unique_stale_org_ids[:8]:
+            reasons = ", ".join(stale_reasons.get(org_id, []))
+            stale_preview.append((org_id, reasons))
+
+        summary_rows = [
+            ("Stale organizations", len(unique_stale_org_ids)),
+            ("Summary CSV updated", str(input_path)),
+            (
+                "Prepare rerun",
+                "benefind prepare-scraping --org-id <id> --refresh",
+            ),
+        ]
+        if signatures_backfilled > 0:
+            summary_rows.append(("Signatures backfilled", signatures_backfilled))
+
+        print_summary(
+            "Scrape Preflight Failed",
+            summary_rows,
+        )
+        if stale_preview:
+            details = "\n".join(f"{org_id}: {reasons}" for org_id, reasons in stale_preview)
+            console.print(make_panel(details, "Stale org preview"))
+        raise typer.Exit(code=1)
+
     success = 0
     failed = 0
     skipped_existing = 0
     skipped_no_targets = 0
+    failure_reason_counts: dict[str, int] = {}
+    scrape_run_id = datetime.now(UTC).isoformat(timespec="seconds")
 
-    console.print(f"Scraping websites for {len(prep_ready_df)} organizations...")
-    for i, (_, row) in enumerate(prep_ready_df.iterrows(), start=1):
+    print_summary(
+        "Scrape Plan",
+        [
+            ("Organizations selected", len(selected_df)),
+            ("Mode", sample_mode),
+            ("Sampling seed", effective_seed),
+            ("Workers", workers),
+            ("Refresh existing", refresh_existing),
+        ],
+    )
+
+    selected_rows = list(selected_df.iterrows())
+
+    def _merge_failure_reasons(counts: dict[str, int]) -> None:
+        for reason, count in sorted(counts.items()):
+            reason_text = str(reason or "").strip()
+            if not reason_text:
+                continue
+            failure_reason_counts[reason_text] = failure_reason_counts.get(reason_text, 0) + int(
+                count or 0
+            )
+
+    def _process_row(position: int, row) -> tuple[int, int, int, str, str, dict[str, int]]:
+        org_id = str(row.get("_org_id", "") or "").strip()
         name = str(row.get("_org_name", "Unknown")).strip() or "Unknown"
-        targets_file_raw = str(row.get("_scrape_targets_file", "")).strip()
+        targets_file_raw = str(row.get("_scrape_targets_file", "") or "").strip()
         if not targets_file_raw:
-            skipped_no_targets += 1
-            continue
+            return 0, 0, 1, name, "missing_targets_file", {}
 
         targets_path = Path(targets_file_raw)
         if not targets_path.is_absolute():
@@ -1344,22 +1618,130 @@ def scrape(
 
         urls = load_org_targets(targets_path)
         if not urls:
-            skipped_no_targets += 1
-            continue
+            return 0, 0, 1, name, "missing_or_empty_targets", {}
 
-        slug = _slugify(name)
-        pages_dir = DATA_DIR / "orgs" / slug / "pages"
+        result = scrape_organization_urls(
+            org_id,
+            name,
+            urls,
+            settings,
+            refresh_existing=refresh_existing,
+            run_id=scrape_run_id,
+        )
 
-        if not refresh_existing and pages_dir.exists() and any(pages_dir.glob("*.md")):
-            skipped_existing += 1
-            continue
+        if result.attempted_count == 0 and result.skipped_success_count > 0:
+            return 0, 1, 0, name, "already_success", {}
+        if result.success_count > 0:
+            return (
+                1,
+                0,
+                0,
+                name,
+                f"success:{result.success_count}/{result.attempted_count}",
+                result.failure_reason_counts,
+            )
+        return (
+            0,
+            0,
+            0,
+            name,
+            f"failed:{result.failed_count}/{result.attempted_count}",
+            result.failure_reason_counts,
+        )
 
-        console.print(f"[dim][{i}/{len(prep_ready_df)}][/dim] {name}")
-        org_dir = scrape_organization_urls(name, urls, settings)
-        if org_dir:
-            success += 1
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        expand=False,
+        console=console,
+    )
+    overall_task = progress.add_task("Organizations", total=len(selected_rows))
+
+    def build_live_view() -> Group:
+        progress_task = progress.tasks[overall_task]
+        total = int(progress_task.total or 0)
+        pending = max(0, total - int(progress_task.completed))
+        return _render_scrape_live_view(
+            progress,
+            mode=sample_mode,
+            workers=workers,
+            pending=pending,
+            scraped_now=success,
+            failed_now=failed,
+            skipped_existing=skipped_existing,
+            skipped_missing_targets=skipped_no_targets,
+            skipped_excluded=skipped_excluded,
+        )
+
+    console.print(f"Scraping websites for {len(selected_rows)} organizations...")
+    with Live(build_live_view(), console=console, refresh_per_second=4) as live:
+        if workers == 1:
+            for i, (_, row) in enumerate(selected_rows, start=1):
+                (
+                    one_success,
+                    one_skipped,
+                    one_no_targets,
+                    name,
+                    note,
+                    reason_counts,
+                ) = _process_row(i, row)
+                if verbose:
+                    console.print(f"[dim][{i}/{len(selected_rows)}][/dim] {name} [{note}]")
+
+                success += one_success
+                skipped_existing += one_skipped
+                skipped_no_targets += one_no_targets
+                _merge_failure_reasons(reason_counts)
+                if one_success == 0 and one_skipped == 0 and one_no_targets == 0:
+                    failed += 1
+
+                progress.advance(overall_task)
+                live.update(build_live_view())
         else:
-            failed += 1
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(_process_row, i, row): i
+                    for i, (_, row) in enumerate(selected_rows, start=1)
+                }
+                for future in as_completed(futures):
+                    i = futures[future]
+                    try:
+                        one_success, one_skipped, one_no_targets, name, note, reason_counts = (
+                            future.result()
+                        )
+                    except Exception as exc:
+                        failed += 1
+                        failure_reason_counts["worker_exception"] = (
+                            failure_reason_counts.get("worker_exception", 0) + 1
+                        )
+                        if verbose:
+                            error_text = f"{type(exc).__name__}: {exc}"
+                            console.print(
+                                f"[dim][{i}/{len(selected_rows)}][/dim] "
+                                f"worker_error: {error_text}"
+                            )
+                        progress.advance(overall_task)
+                        live.update(build_live_view())
+                        continue
+
+                    if verbose:
+                        console.print(f"[dim][{i}/{len(selected_rows)}][/dim] {name} [{note}]")
+
+                    success += one_success
+                    skipped_existing += one_skipped
+                    skipped_no_targets += one_no_targets
+                    _merge_failure_reasons(reason_counts)
+                    if one_success == 0 and one_skipped == 0 and one_no_targets == 0:
+                        failed += 1
+
+                    progress.advance(overall_task)
+                    live.update(build_live_view())
 
     print_summary(
         "Scrape Results",
@@ -1369,8 +1751,14 @@ def scrape(
             ("Skipped existing", skipped_existing),
             ("Skipped missing targets", skipped_no_targets),
             ("Skipped excluded", skipped_excluded),
+            ("Failure reason codes", len(failure_reason_counts)),
         ],
     )
+    if failure_reason_counts:
+        reason_lines = [
+            f"{reason}: {count}" for reason, count in sorted(failure_reason_counts.items())
+        ]
+        console.print(make_panel("\n".join(reason_lines), "Failure reason distribution"))
 
 
 @app.command()
@@ -2539,11 +2927,16 @@ def delete_cmd(
 @app.command()
 def review(
     what: str = typer.Argument(
-        ..., help="What to review: locations, websites, or url-normalization"
+        ..., help="What to review: locations, websites, url-normalization, scrape-readiness"
     ),
 ) -> None:
     """Review flagged items interactively and decide include/exclude."""
-    from benefind.review import review_locations, review_url_normalization, review_websites
+    from benefind.review import (
+        review_locations,
+        review_scrape_readiness,
+        review_url_normalization,
+        review_websites,
+    )
 
     settings = load_settings()
     _setup_logging(settings.log_level)
@@ -2555,8 +2948,12 @@ def review(
         review_websites()
     elif target in {"url-normalization", "url_normalization", "urlnorm", "url-norm"}:
         review_url_normalization()
+    elif target in {"scrape-readiness", "scrape_readiness"}:
+        review_scrape_readiness()
     else:
-        raise typer.BadParameter("Expected one of: locations, websites, url-normalization")
+        raise typer.BadParameter(
+            "Expected one of: locations, websites, url-normalization, scrape-readiness"
+        )
 
 
 @app.command(name="review-url-normalization")

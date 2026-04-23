@@ -10,6 +10,8 @@ Builds a per-organization scraping plan before actual page scraping:
 from __future__ import annotations
 
 import gzip
+import hashlib
+import json
 import logging
 import re
 import time
@@ -68,6 +70,37 @@ class ScopeDefinition:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def build_prepare_input_signature(
+    org: dict,
+    settings: Settings,
+    *,
+    org_id_column: str = "_org_id",
+    website_column: str = "_website_url_final",
+    excluded_reason_column: str = "_excluded_reason",
+) -> str:
+    """Build deterministic signature for scrape-prepare freshness checks."""
+    payload = {
+        "org_id": str(org.get(org_id_column, "") or "").strip(),
+        "website_url_final": str(org.get(website_column, "") or "").strip(),
+        "excluded_reason": str(org.get(excluded_reason_column, "") or "").strip(),
+        "prepare_config": {
+            "respect_robots_txt": bool(settings.scraping.respect_robots_txt),
+            "prepare_include_subdomains": bool(settings.scraping.prepare_include_subdomains),
+            "prepare_keep_ranked_urls_per_org": int(
+                settings.scraping.prepare_keep_ranked_urls_per_org
+            ),
+            "prepare_discovery_safety_cap": int(settings.scraping.prepare_discovery_safety_cap),
+            "prepare_stale_sitemap_days": int(settings.scraping.prepare_stale_sitemap_days),
+            "prepare_section_cap_per_org": int(settings.scraping.prepare_section_cap_per_org),
+            "prepare_sitemap_max_files": int(settings.scraping.prepare_sitemap_max_files),
+            "prepare_sitemap_max_depth": int(settings.scraping.prepare_sitemap_max_depth),
+            "prepare_fallback_max_visits": int(settings.scraping.prepare_fallback_max_visits),
+        },
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
 
 
 def _normalize_url(url: str) -> str:
@@ -1046,7 +1079,12 @@ def _make_prepare_summary(
     excluded_count: int = 0,
     kept_count: int = 0,
     sitemap_stale: bool = False,
+    input_signature: str = "",
 ) -> dict:
+    needs_readiness_review = prep_status == "blocked" or (
+        prep_status == "no_urls" and robots_fetch == "seed_unreachable"
+    )
+    readiness_status = "pending" if needs_readiness_review else "not_required"
     return {
         "_org_id": org_id,
         "_org_name": org_name,
@@ -1068,6 +1106,13 @@ def _make_prepare_summary(
         "_scrape_prep_error": prep_error,
         "_scrape_prepared_at": prepared_at,
         "_scrape_targets_file": "",
+        "_scrape_input_signature": input_signature,
+        "_scrape_requires_reprepare": False,
+        "_scrape_signature_checked_at": prepared_at,
+        "_scrape_readiness_status": readiness_status,
+        "_scrape_readiness_reason": "",
+        "_scrape_readiness_note": "",
+        "_scrape_readiness_reviewed_at": "",
     }
 
 
@@ -1082,6 +1127,12 @@ def _prepare_single_org(
     org_id = str(org.get(org_id_column, "") or "").strip()
     org_name = str(org.get(name_column, "") or "").strip() or "Unknown"
     website_url = str(org.get(website_column, "") or "").strip()
+    input_signature = build_prepare_input_signature(
+        org,
+        settings,
+        org_id_column=org_id_column,
+        website_column=website_column,
+    )
 
     if not website_url:
         summary = _make_prepare_summary(
@@ -1095,6 +1146,7 @@ def _prepare_single_org(
             allowed=False,
             prep_status="no_website",
             prep_error="",
+            input_signature=input_signature,
         )
         return summary, []
 
@@ -1112,6 +1164,7 @@ def _prepare_single_org(
             allowed=False,
             prep_status="invalid_url",
             prep_error="unsupported_or_invalid_url",
+            input_signature=input_signature,
         )
         return summary, []
 
@@ -1135,6 +1188,7 @@ def _prepare_single_org(
                 allowed=True,
                 prep_status="no_urls",
                 prep_error=seed_probe_error,
+                input_signature=input_signature,
             )
             return summary, []
 
@@ -1171,6 +1225,7 @@ def _prepare_single_org(
                 allowed=False,
                 prep_status="blocked",
                 prep_error=prep_error,
+                input_signature=input_signature,
             )
             return summary, []
 
@@ -1237,6 +1292,7 @@ def _prepare_single_org(
         excluded_count=excluded_count,
         kept_count=len(targets),
         sitemap_stale=sitemap_stale,
+        input_signature=input_signature,
     )
 
     return summary, targets
@@ -1263,6 +1319,13 @@ SUMMARY_COLUMNS = [
     "_scrape_prep_error",
     "_scrape_prepared_at",
     "_scrape_targets_file",
+    "_scrape_input_signature",
+    "_scrape_requires_reprepare",
+    "_scrape_signature_checked_at",
+    "_scrape_readiness_status",
+    "_scrape_readiness_reason",
+    "_scrape_readiness_note",
+    "_scrape_readiness_reviewed_at",
 ]
 
 TARGET_COLUMNS = [

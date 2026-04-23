@@ -347,13 +347,14 @@ def test_evaluate_saves_partial_results_on_failfast(tmp_path) -> None:
     evaluate_module.ask_llm = _fake_ask_llm
     try:
         with pytest.raises(ExternalApiAccessError):
-            evaluate_organization("Org", "Winterthur", "Purpose", org_dir, settings)
+            evaluate_organization("org_1", "Org", "Winterthur", "Purpose", org_dir, settings)
     finally:
         evaluate_module.ask_llm = original
 
     payload = json.loads((org_dir / "evaluation.json").read_text(encoding="utf-8"))
     assert payload["q1"]["answer"] == "ok"
     assert "q2" not in payload
+    assert payload["_org_id"] == "org_1"
     assert payload["_org_name"] == "Org"
 
 

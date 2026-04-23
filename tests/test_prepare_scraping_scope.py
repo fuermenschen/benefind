@@ -7,6 +7,7 @@ from benefind.prepare_scraping import (
     _build_scope_from_final_url,
     _prepare_single_org,
     _resolve_reachable_scope,
+    build_prepare_input_signature,
 )
 
 
@@ -106,3 +107,55 @@ def test_prepare_single_org_uses_final_url_scope_without_heuristic_promotion(
     assert summary["_scrape_prep_status"] == "ready"
     assert len(targets) == 1
     assert targets[0]["_prepared_url"] == "https://example.org/de/verein"
+
+
+def test_prepare_signature_is_deterministic_and_changes_on_final_url() -> None:
+    settings = Settings()
+    org = {
+        "_org_id": "org_test_1",
+        "_website_url_final": "https://example.org/",
+        "_excluded_reason": "",
+    }
+
+    sig_one = build_prepare_input_signature(org, settings)
+    sig_two = build_prepare_input_signature(org, settings)
+    assert sig_one == sig_two
+
+    changed = dict(org)
+    changed["_website_url_final"] = "https://example.org/about"
+    sig_three = build_prepare_input_signature(changed, settings)
+    assert sig_three != sig_one
+
+
+def test_prepare_single_org_seed_unreachable_marks_readiness_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings()
+    settings.scraping.respect_robots_txt = False
+
+    monkeypatch.setattr(
+        "benefind.prepare_scraping.httpx.Client",
+        lambda **_kwargs: _FakeHttpClient(),
+    )
+    monkeypatch.setattr(
+        "benefind.prepare_scraping._resolve_reachable_scope",
+        lambda _client, _scope, _timeout: (None, "seed_unreachable:all_probe_attempts_failed"),
+    )
+
+    summary, targets = _prepare_single_org(
+        {
+            "_org_id": "org_test_2",
+            "Bezeichnung": "Unreachable Verein",
+            "_website_url_final": "https://example.org/",
+        },
+        settings,
+        org_id_column="_org_id",
+        name_column="Bezeichnung",
+        website_column="_website_url_final",
+    )
+
+    assert summary["_scrape_prep_status"] == "no_urls"
+    assert summary["_scrape_robots_fetch"] == "seed_unreachable"
+    assert summary["_scrape_readiness_status"] == "pending"
+    assert summary["_scrape_input_signature"]
+    assert targets == []

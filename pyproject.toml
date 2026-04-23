@@ -28,6 +28,11 @@ dependencies = [
     "robotexclusionrulesparser>=1.7",
     # HTML parsing
     "beautifulsoup4>=4.12",
+    # Content extraction alternatives
+    "trafilatura>=1.8",
+    "readability-lxml>=0.8.1",
+    # Browser rendering fallback
+    "playwright>=1.52",
     # Environment variables
     "python-dotenv>=1.0",
 ]

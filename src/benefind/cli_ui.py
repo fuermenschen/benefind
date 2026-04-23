@@ -304,6 +304,24 @@ def ask_text(message: str, *, default: str = "") -> str:
     return (result or "").strip()
 
 
+def ask_select(
+    message: str,
+    choices: list[tuple[str, str]],
+    *,
+    default_value: str | None = None,
+) -> str:
+    """Prompt for a single selection via questionary select."""
+    questionary_choices = [Choice(title=title, value=value) for title, value in choices]
+    result = questionary.select(
+        message,
+        choices=questionary_choices,
+        default=default_value,
+        style=QUESTIONARY_STYLE,
+        qmark="",
+    ).ask()
+    return str(result or "").strip()
+
+
 def ask_checkbox(
     message: str,
     choices: list[tuple[str, str]],

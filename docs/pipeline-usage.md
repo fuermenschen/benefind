@@ -180,6 +180,35 @@ Every website decision is persisted immediately.
 - writes readiness decisions immediately and keeps queue state resumable
 - if you update a final URL from this step, prepare is re-run for that org immediately
 
+`benefind scrape` supports targeted and concurrent runs:
+
+- `uv run benefind scrape --workers 8`
+- `uv run benefind scrape --subset -n 10 --subset-seed 42`
+- `uv run benefind scrape --debug-sample`
+- `uv run benefind scrape --debug-sample --debug-org-id org_xxxxx_1`
+- `uv run benefind scrape --refresh-existing`
+- `uv run benefind scrape --verbose`
+
+Scrape execution policy highlights:
+
+- runs static HTML extraction first and only escalates to Playwright when static extraction is poor
+- never uses Playwright for network/TLS failures, HTTP `401/403/5xx`, or non-HTML responses
+- stores URL-level scrape manifest metadata per attempt, including fetch mode, extractor scores,
+  render trigger reason, final URL, and page metadata fields
+- Playwright fallback requires browser binaries once per environment:
+  `uv run playwright install chromium`
+- if Playwright runtime is unavailable (missing package/browser), scrape keeps static extraction as
+  degraded success and records the fallback reason in `_render_trigger_reason`
+
+Evaluate/report artifact alignment:
+
+- `benefind evaluate` now requires `_org_id` in input rows and reads scrape artifacts from
+  `data/orgs/<_org_id>/pages/` only
+- `benefind report` collects evaluations from active `_org_id` rows in
+  `data/filtered/organizations_with_websites.csv`
+- if that CSV is missing or has no active rows, report falls back to available `_org_id`
+  `evaluation.json` artifacts under `data/orgs/`
+
 Prepare-scraping URL scoring reads its lexical ranking rules from `config/url_scoring.toml`.
 For provenance and maintenance guidance, see `docs/url-scoring-method.md`.
 
