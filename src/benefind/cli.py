@@ -3076,12 +3076,17 @@ def delete_cmd(
 @app.command()
 def review(
     what: str = typer.Argument(
-        ..., help="What to review: locations, websites, url-normalization, scrape-readiness"
+        ...,
+        help=(
+            "What to review: locations, websites, url-normalization, "
+            "scrape-readiness, scrape-quality"
+        ),
     ),
 ) -> None:
     """Review flagged items interactively and decide include/exclude."""
     from benefind.review import (
         review_locations,
+        review_scrape_quality,
         review_scrape_readiness,
         review_url_normalization,
         review_websites,
@@ -3099,9 +3104,12 @@ def review(
         review_url_normalization()
     elif target in {"scrape-readiness", "scrape_readiness"}:
         review_scrape_readiness()
+    elif target in {"scrape-quality", "scrape_quality"}:
+        review_scrape_quality()
     else:
         raise typer.BadParameter(
-            "Expected one of: locations, websites, url-normalization, scrape-readiness"
+            "Expected one of: locations, websites, url-normalization, "
+            "scrape-readiness, scrape-quality"
         )
 
 

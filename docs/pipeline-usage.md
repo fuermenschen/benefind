@@ -126,6 +126,7 @@ In debug mode, discover also prints the simulated final decision stage and, when
 ```bash
 uv run benefind review locations                    # include/exclude uncertain location matches
 uv run benefind review websites                     # review uncertain websites via wizard
+uv run benefind review scrape-quality               # review no/poor scrape outcomes
 ```
 
 Website review wizard actions:
@@ -189,6 +190,11 @@ Every website decision is persisted immediately.
 - `uv run benefind scrape --refresh-existing`
 - `uv run benefind scrape --reset` (interactive wipe of scrape outputs only; keeps `scrape_prep/`)
 - `uv run benefind scrape --verbose`
+
+After scraping, run `uv run benefind review scrape-quality` to process organizations
+with no successful scrape pages or only low-quality pages. Actions mirror scrape-readiness
+review: retry scrape, set final URL and re-prepare, exclude with predefined reason,
+accept as-is, skip, or quit.
 
 Scrape execution policy highlights:
 

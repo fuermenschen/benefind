@@ -41,6 +41,7 @@ from benefind.exclusion_reasons import (
 )
 from benefind.prepare_scraping import (
     PrepareCheckpointWriter,
+    load_org_targets,
     load_prepare_summary,
     prepare_scraping_batch,
 )
@@ -111,6 +112,17 @@ _SCRAPE_READINESS_ACTIONS = [
     ("q", "Quit"),
 ]
 _SCRAPE_READINESS_VALID_KEYS = [k for k, _ in _SCRAPE_READINESS_ACTIONS] + ["esc"]
+
+# Key bindings for scrape quality review
+_SCRAPE_QUALITY_ACTIONS = [
+    ("r", "Retry scrape"),
+    ("u", "Set final URL"),
+    ("x", "Exclude org"),
+    ("d", "Accept as-is"),
+    ("s", "Skip"),
+    ("q", "Quit"),
+]
+_SCRAPE_QUALITY_VALID_KEYS = [k for k, _ in _SCRAPE_QUALITY_ACTIONS] + ["esc"]
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +335,55 @@ def _prompt_exclusion_reason() -> tuple[ExcludeReason, str] | None:
     return reason, str(note or "").strip()
 
 
+def _prompt_exclusion_reason_no_text() -> tuple[ExcludeReason, str] | None:
+    options = [
+        option
+        for option in EXCLUDE_REASON_OPTIONS
+        if option.reason
+        in {
+            ExcludeReason.NO_INFORMATION,
+            ExcludeReason.IN_LIQUIDATION,
+            ExcludeReason.NOT_EXIST,
+            ExcludeReason.IRRELEVANT_PURPOSE,
+        }
+    ]
+    choices = [
+        (f"{option.label} [{option.reason.value}]", option.reason.value)
+        for option in options
+    ]
+    selected = ask_select(
+        "Exclude reason",
+        choices,
+        default_value=ExcludeReason.NO_INFORMATION.value,
+    )
+    if not selected:
+        print_warning("No exclusion reason selected.")
+        return None
+    return ExcludeReason(selected), ""
+
+
+def _exclude_org_in_websites(
+    websites_path: Path,
+    org_id: str,
+    reason: ExcludeReason,
+    note: str = "",
+) -> None:
+    websites_df = _load_latest_websites_df(websites_path)
+    timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+    websites_df = _upsert_websites_row(
+        websites_df,
+        org_id,
+        {
+            "_excluded_reason": reason.value,
+            "_excluded_reason_note": str(note or "").strip(),
+            "_excluded_at": timestamp,
+            "_website_origin": "manual_excluded",
+            "_website_needs_review": False,
+        },
+    )
+    _save_websites_df(websites_df, websites_path)
+
+
 def _load_latest_websites_df(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, encoding="utf-8-sig")
     if "_org_id" not in df.columns:
@@ -482,6 +543,643 @@ def _run_prepare_for_org(
     if not summaries:
         return None, "Prepare returned no summary"
     return summaries[0], ""
+
+
+def _assess_scrape_quality(
+    manifest_df: pd.DataFrame,
+) -> tuple[bool, str, int, int, int, str]:
+    if manifest_df.empty:
+        return True, "no_manifest_rows", 0, 0, 0, ""
+
+    for column in [
+        "_prepared_url",
+        "_page_status",
+        "_page_failure_detail",
+        "_content_quality",
+        "_content_quality_reason",
+    ]:
+        if column not in manifest_df.columns:
+            manifest_df[column] = ""
+
+    latest = manifest_df.drop_duplicates(subset="_prepared_url", keep="last")
+    status_series = latest["_page_status"].astype(str).str.strip().str.lower()
+    detail_series = latest["_page_failure_detail"].astype(str).str.strip().str.lower()
+    success_mask = status_series == "success"
+    carried_success_mask = (status_series == "skipped") & (detail_series == "already_success")
+    success_df = latest[success_mask | carried_success_mask]
+
+    success_count = int(len(success_df))
+    total_count = int(len(latest))
+    if success_count == 0:
+        return True, "no_success_pages", total_count, 0, success_count, ""
+
+    low_mask = success_df["_content_quality"].astype(str).str.strip().str.lower() == "low"
+    low_count = int(low_mask.sum())
+    if low_count < success_count:
+        return False, "", total_count, low_count, success_count, ""
+
+    reason_counts = (
+        success_df["_content_quality_reason"].astype(str).str.strip().value_counts().to_dict()
+    )
+    reason_preview = "; ".join(
+        f"{reason}: {count}"
+        for reason, count in reason_counts.items()
+        if reason
+    )
+    return True, "all_success_low_quality", total_count, low_count, success_count, reason_preview
+
+
+def _ensure_scrape_quality_columns(df: pd.DataFrame) -> pd.DataFrame:
+    defaults = {
+        "_org_id": "",
+        "_org_name": "",
+        "_scrape_quality_issue": "",
+        "_scrape_quality_detail": "",
+        "_scrape_quality_total_pages": 0,
+        "_scrape_quality_low_pages": 0,
+        "_scrape_quality_success_pages": 0,
+        "_scrape_quality_manifest_path": "",
+        "_scrape_quality_manifest_mtime": "",
+        "_scrape_quality_signature": "",
+        "_scrape_quality_status": "pending",
+        "_scrape_quality_reason": "",
+        "_scrape_quality_note": "",
+        "_scrape_quality_reviewed_at": "",
+    }
+    for column, default in defaults.items():
+        if column not in df.columns:
+            df[column] = default
+
+    text_columns = [
+        "_org_id",
+        "_org_name",
+        "_scrape_quality_issue",
+        "_scrape_quality_detail",
+        "_scrape_quality_manifest_path",
+        "_scrape_quality_manifest_mtime",
+        "_scrape_quality_signature",
+        "_scrape_quality_status",
+        "_scrape_quality_reason",
+        "_scrape_quality_note",
+        "_scrape_quality_reviewed_at",
+    ]
+    for column in text_columns:
+        df[column] = df[column].astype(object).where(df[column].notna(), "")
+
+    numeric_columns = [
+        "_scrape_quality_total_pages",
+        "_scrape_quality_low_pages",
+        "_scrape_quality_success_pages",
+    ]
+    for column in numeric_columns:
+        df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0).astype(int)
+
+    return df
+
+
+def _retry_scrape_for_org(
+    org_id: str,
+    websites_df: pd.DataFrame,
+    prep_path: Path,
+) -> tuple[dict | None, str]:
+    from benefind.scrape import scrape_organization_urls
+
+    if not prep_path.exists():
+        return None, f"Scrape prep file not found: {prep_path}"
+
+    try:
+        prep_df = _load_latest_prep_df(prep_path)
+    except ValueError as e:
+        return None, str(e)
+
+    prep_mask = prep_df["_org_id"].astype(str).str.strip() == org_id
+    if not prep_mask.any():
+        return None, "Organization is missing in scrape prep CSV"
+
+    prep_row = prep_df[prep_mask].iloc[-1]
+    targets_file_raw = str(prep_row.get("_scrape_targets_file", "") or "").strip()
+    if not targets_file_raw:
+        return None, "_scrape_targets_file is missing for this organization"
+
+    targets_path = Path(targets_file_raw)
+    if not targets_path.is_absolute():
+        targets_path = (DATA_DIR.parent / targets_path).resolve()
+    urls = load_org_targets(targets_path)
+    if not urls:
+        return None, f"No targets found at {targets_path}"
+
+    org_mask = websites_df["_org_id"].astype(str).str.strip() == org_id
+    org_name = "Unknown"
+    if org_mask.any():
+        website_row = websites_df[org_mask].iloc[-1]
+        name_col = _detect_first_column(websites_df, NAME_COLUMN_CANDIDATES, default="")
+        if name_col:
+            org_name = str(website_row.get(name_col, "") or "").strip() or org_name
+        org_name = str(website_row.get("_org_name", "") or "").strip() or org_name
+
+    settings = load_settings()
+    result = scrape_organization_urls(
+        org_id,
+        org_name,
+        urls,
+        settings,
+        refresh_existing=True,
+    )
+
+    summary = {
+        "attempted": int(result.attempted_count),
+        "success": int(result.success_count),
+        "failed": int(result.failed_count),
+        "skipped_existing": int(result.skipped_success_count),
+    }
+    return summary, ""
+
+
+def _build_scrape_quality_candidates(websites_df: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    active_df = websites_df.copy()
+    name_column = _detect_first_column(active_df, NAME_COLUMN_CANDIDATES, default="")
+    if "_excluded_reason" not in active_df.columns:
+        active_df["_excluded_reason"] = ""
+    active_df = active_df[~active_df["_excluded_reason"].apply(has_exclusion_reason)]
+    active_df = active_df.drop_duplicates(subset="_org_id", keep="last")
+
+    for _, row in active_df.iterrows():
+        org_id = str(row.get("_org_id", "") or "").strip()
+        if not org_id:
+            continue
+
+        org_name_candidates = []
+        if name_column:
+            org_name_candidates.append(str(row.get(name_column, "") or "").strip())
+        org_name_candidates.append(str(row.get("_org_name", "") or "").strip())
+        org_name = next((name for name in org_name_candidates if name), "Unknown")
+        manifest_path = DATA_DIR / "orgs" / org_id / "scrape" / "manifest.csv"
+        if not manifest_path.exists():
+            continue
+
+        try:
+            manifest_df = pd.read_csv(manifest_path, encoding="utf-8-sig")
+        except Exception:
+            rows.append(
+                {
+                    "_org_id": org_id,
+                    "_org_name": org_name,
+                    "_scrape_quality_issue": "manifest_unreadable",
+                    "_scrape_quality_detail": "Could not read scrape manifest",
+                    "_scrape_quality_total_pages": 0,
+                    "_scrape_quality_low_pages": 0,
+                    "_scrape_quality_success_pages": 0,
+                    "_scrape_quality_manifest_path": str(manifest_path),
+                }
+            )
+            continue
+
+        flagged, issue, total_count, low_count, success_count, detail = _assess_scrape_quality(
+            manifest_df
+        )
+        if not flagged:
+            continue
+
+        rows.append(
+            {
+                "_org_id": org_id,
+                "_org_name": org_name,
+                "_scrape_quality_issue": issue,
+                "_scrape_quality_detail": detail,
+                "_scrape_quality_total_pages": total_count,
+                "_scrape_quality_low_pages": low_count,
+                "_scrape_quality_success_pages": success_count,
+                "_scrape_quality_manifest_path": str(manifest_path),
+                "_scrape_quality_manifest_mtime": str(int(manifest_path.stat().st_mtime_ns)),
+                "_scrape_quality_signature": (
+                    f"{issue}|{detail}|{total_count}|{low_count}|{success_count}|"
+                    f"{int(manifest_path.stat().st_mtime_ns)}"
+                ),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def _scrape_quality_org_panel(
+    org_name: str,
+    org_id: str,
+    position: int,
+    total: int,
+) -> None:
+    rows = [
+        ("Name", f"[{C_PRIMARY}]{org_name}[/{C_PRIMARY}]"),
+        ("Org ID", f"[{C_MUTED}]{org_id}[/{C_MUTED}]"),
+    ]
+    console.print(
+        make_panel(
+            make_kv_table(rows),
+            f"Scrape Quality  [{C_MUTED}]{position}/{total}[/{C_MUTED}]",
+        )
+    )
+
+
+def _scrape_quality_info_panel(row: pd.Series, websites_row: pd.Series | None) -> None:
+    issue = str(row.get("_scrape_quality_issue", "") or "-")
+    detail = str(row.get("_scrape_quality_detail", "") or "").strip()
+    total_pages = int(float(row.get("_scrape_quality_total_pages", 0) or 0))
+    success_pages = int(float(row.get("_scrape_quality_success_pages", 0) or 0))
+    low_pages = int(float(row.get("_scrape_quality_low_pages", 0) or 0))
+
+    website_url = ""
+    final_url = ""
+    if websites_row is not None:
+        website_url = str(websites_row.get("_website_url", "") or "").strip()
+        final_url = str(websites_row.get("_website_url_final", "") or "").strip()
+
+    rows = [
+        ("Issue", issue),
+        ("Successful pages", str(success_pages)),
+        ("Low-quality pages", str(low_pages)),
+        ("Tracked URLs", str(total_pages)),
+        ("Website URL", fmt_url(website_url)),
+        ("Final URL", fmt_url(final_url)),
+        (
+            "Manifest",
+            f"[{C_MUTED}]"
+            f"{str(row.get('_scrape_quality_manifest_path', '') or '-')}"
+            f"[/{C_MUTED}]",
+        ),
+    ]
+    if detail:
+        rows.append(("Detail", f"[{C_MUTED}]{detail[:220]}[/{C_MUTED}]"))
+    console.print(make_panel(make_kv_table(rows), "Scrape Diagnostics"))
+
+
+def _scrape_quality_actions_panel() -> None:
+    console.print(make_panel(make_actions_table(_SCRAPE_QUALITY_ACTIONS), "Actions"))
+
+
+def _reset_stale_scrape_quality_statuses(df: pd.DataFrame) -> pd.DataFrame:
+    previous_signature_col = "_scrape_quality_signature_previous"
+    if previous_signature_col not in df.columns:
+        df[previous_signature_col] = ""
+
+    status_series = df["_scrape_quality_status"].astype(str).str.strip().str.lower()
+    signature_changed = (
+        df["_scrape_quality_signature"].astype(str).str.strip()
+        != df[previous_signature_col].astype(str).str.strip()
+    )
+
+    previously_excluded_mask = status_series == "excluded"
+    resolved_changed_mask = (status_series == "resolved") & signature_changed
+    reset_mask = previously_excluded_mask | resolved_changed_mask
+    if reset_mask.any():
+        df.loc[reset_mask, "_scrape_quality_status"] = "pending"
+        df.loc[reset_mask, "_scrape_quality_reason"] = "quality_snapshot_changed"
+        df.loc[reset_mask, "_scrape_quality_note"] = ""
+        df.loc[reset_mask, "_scrape_quality_reviewed_at"] = ""
+
+    return df.drop(columns=[previous_signature_col], errors="ignore")
+
+
+def review_scrape_quality() -> dict[str, int]:
+    """Review organizations with no/poor scrape content."""
+    websites_path = DATA_DIR / "filtered" / "organizations_with_websites.csv"
+    prep_path = DATA_DIR / "filtered" / "organizations_scrape_prep.csv"
+    quality_path = DATA_DIR / "filtered" / "organizations_scrape_quality_review.csv"
+
+    if not websites_path.exists():
+        console.print(f"[yellow]No file found at {websites_path}[/yellow]")
+        console.print("Run [bold]benefind discover[/bold] first.")
+        return {"resolved": 0, "accepted_as_is": 0, "excluded": 0, "remaining": 0}
+
+    websites_df = _load_latest_websites_df(websites_path)
+    if websites_df.empty:
+        console.print("[yellow]No organizations found in websites CSV.[/yellow]")
+        return {"resolved": 0, "accepted_as_is": 0, "excluded": 0, "remaining": 0}
+
+    candidates_df = _build_scrape_quality_candidates(websites_df)
+    if candidates_df.empty:
+        console.print("[green]No organizations with no/poor scrape quality found.[/green]")
+        return {"resolved": 0, "accepted_as_is": 0, "excluded": 0, "remaining": 0}
+
+    if quality_path.exists():
+        existing_df = pd.read_csv(quality_path, encoding="utf-8-sig")
+    else:
+        existing_df = pd.DataFrame()
+    existing_df = _ensure_scrape_quality_columns(existing_df)
+
+    defaults = {
+        "_scrape_quality_status": "pending",
+        "_scrape_quality_reason": "",
+        "_scrape_quality_note": "",
+        "_scrape_quality_reviewed_at": "",
+        "_scrape_quality_signature": "",
+    }
+
+    existing_df = existing_df.drop_duplicates(subset="_org_id", keep="last")
+    merged_df = candidates_df.merge(
+        existing_df[
+            [
+                "_org_id",
+                "_scrape_quality_status",
+                "_scrape_quality_reason",
+                "_scrape_quality_note",
+                "_scrape_quality_reviewed_at",
+                "_scrape_quality_signature",
+            ]
+        ],
+        on="_org_id",
+        how="left",
+        suffixes=("", "_previous"),
+    )
+
+    for key, default in defaults.items():
+        merged_df[key] = merged_df[key].fillna(default).astype(object)
+    merged_df = _reset_stale_scrape_quality_statuses(merged_df)
+
+    def _save_quality_df(df_to_save: pd.DataFrame) -> None:
+        normalized_df = _ensure_scrape_quality_columns(df_to_save)
+        _save_csv_atomic(normalized_df, quality_path)
+
+    _save_quality_df(merged_df)
+
+    unresolved_mask = ~merged_df["_scrape_quality_status"].astype(str).str.strip().str.lower().isin(
+        {"resolved", "excluded"}
+    )
+    queue_ids = [
+        str(value).strip()
+        for value in merged_df[unresolved_mask]["_org_id"].tolist()
+        if str(value).strip()
+    ]
+    if not queue_ids:
+        console.print("[green]No scrape-quality rows pending review.[/green]")
+        return {"resolved": 0, "accepted_as_is": 0, "excluded": 0, "remaining": 0}
+
+    progress = ReviewProgress(total=len(queue_ids))
+    resolved = 0
+    accepted_as_is = 0
+    excluded = 0
+    quit_requested = False
+
+    for position, org_id in enumerate(queue_ids, start=1):
+        progress.current = position - 1
+
+        while True:
+            websites_df = _load_latest_websites_df(websites_path)
+            quality_df = pd.read_csv(quality_path, encoding="utf-8-sig")
+            quality_df = _ensure_scrape_quality_columns(quality_df)
+            quality_df = quality_df.drop_duplicates(subset="_org_id", keep="last")
+
+            mask = quality_df["_org_id"].astype(str).str.strip() == org_id
+            if not mask.any():
+                progress.mark_skipped()
+                break
+
+            idx = quality_df[mask].index[-1]
+            row = quality_df.loc[idx]
+            status = str(row.get("_scrape_quality_status", "") or "").strip().lower()
+            if status in {"resolved", "excluded"}:
+                progress.mark_skipped()
+                break
+
+            org_name = str(row.get("_org_name", "") or "").strip() or "Unknown"
+            websites_row = None
+            websites_mask = websites_df["_org_id"].astype(str).str.strip() == org_id
+            if websites_mask.any():
+                websites_row = websites_df[websites_mask].iloc[-1]
+
+            clear()
+            console.print(progress.as_panel("Scrape Quality Review"))
+            _scrape_quality_org_panel(org_name, org_id, position, len(queue_ids))
+            _scrape_quality_info_panel(row, websites_row)
+            _scrape_quality_actions_panel()
+
+            try:
+                key = wait_for_key(_SCRAPE_QUALITY_VALID_KEYS)
+            except KeyboardInterrupt:
+                quit_requested = True
+                break
+
+            if key in ("q", "esc"):
+                quit_requested = True
+                break
+
+            if key == "s":
+                print_skip("Skipped")
+                progress.mark_skipped()
+                break
+
+            if key == "d":
+                quality_df.at[idx, "_scrape_quality_status"] = "resolved"
+                quality_df.at[idx, "_scrape_quality_reason"] = "accepted_as_is_manual"
+                quality_df.at[idx, "_scrape_quality_note"] = ""
+                quality_df.at[idx, "_scrape_quality_reviewed_at"] = datetime.now(UTC).isoformat(
+                    timespec="seconds"
+                )
+                _save_quality_df(quality_df)
+                accepted_as_is += 1
+                resolved += 1
+                progress.mark_accepted()
+                print_success("Accepted as-is")
+                break
+
+            if key == "x":
+                exclusion = _prompt_exclusion_reason_no_text()
+                if exclusion is None:
+                    continue
+                reason, note = exclusion
+                if not confirm(f"Exclude '{org_name}' with reason {reason.value}?", default=False):
+                    print_skip("Cancelled")
+                    continue
+
+                _exclude_org_in_websites(websites_path, org_id, reason, note)
+                if prep_path.exists():
+                    _update_prep_readiness(
+                        prep_path,
+                        org_id,
+                        status="excluded",
+                        reason=f"excluded:{reason.value}",
+                        note=note,
+                    )
+
+                quality_df.at[idx, "_scrape_quality_status"] = "excluded"
+                quality_df.at[idx, "_scrape_quality_reason"] = f"excluded:{reason.value}"
+                quality_df.at[idx, "_scrape_quality_note"] = note
+                quality_df.at[idx, "_scrape_quality_reviewed_at"] = datetime.now(UTC).isoformat(
+                    timespec="seconds"
+                )
+                _save_quality_df(quality_df)
+
+                excluded += 1
+                progress.mark_excluded()
+                print_success(f"Excluded: {reason.value}")
+                break
+
+            if key == "u":
+                current_final = ""
+                current_base = ""
+                if websites_row is not None:
+                    current_final = str(websites_row.get("_website_url_final", "") or "").strip()
+                    current_base = str(websites_row.get("_website_url", "") or "").strip()
+                default_url = current_final or current_base
+                new_url = ask_text("Final website URL", default=default_url)
+                if not str(new_url or "").strip():
+                    print_skip("No URL entered")
+                    continue
+                if not confirm(f"Set final URL to {new_url}?", default=True):
+                    print_skip("Cancelled")
+                    continue
+
+                timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+                websites_df = _load_latest_websites_df(websites_path)
+                websites_df = _upsert_websites_row(
+                    websites_df,
+                    org_id,
+                    {
+                        "_website_url_final": str(new_url).strip(),
+                        "_excluded_reason": "",
+                        "_excluded_reason_note": "",
+                        "_excluded_at": "",
+                        "_website_origin": "manual",
+                        "_website_needs_review": False,
+                        "_website_url_norm_reviewed_at": timestamp,
+                    },
+                )
+                _save_websites_df(websites_df, websites_path)
+
+                summary, error = _run_prepare_for_org(org_id, websites_df, prep_path)
+                if error:
+                    quality_df.at[idx, "_scrape_quality_status"] = "pending"
+                    quality_df.at[idx, "_scrape_quality_reason"] = "manual_final_url_prepare_error"
+                    quality_df.at[idx, "_scrape_quality_note"] = error
+                    quality_df.at[idx, "_scrape_quality_reviewed_at"] = datetime.now(UTC).isoformat(
+                        timespec="seconds"
+                    )
+                    _save_quality_df(quality_df)
+                    print_warning(error)
+                    continue
+
+                prep_status = str(summary.get("_scrape_prep_status", "") or "").strip().lower()
+                if prep_status == "ready":
+                    quality_df.at[idx, "_scrape_quality_status"] = "resolved"
+                    quality_df.at[idx, "_scrape_quality_reason"] = "manual_final_url_ready"
+                    quality_df.at[idx, "_scrape_quality_note"] = ""
+                    quality_df.at[idx, "_scrape_quality_reviewed_at"] = datetime.now(UTC).isoformat(
+                        timespec="seconds"
+                    )
+                    _save_quality_df(quality_df)
+
+                    resolved += 1
+                    progress.mark_accepted()
+                    print_success("Final URL saved and prepare resolved")
+                    break
+
+                quality_df.at[idx, "_scrape_quality_status"] = "pending"
+                quality_df.at[idx, "_scrape_quality_reason"] = "manual_final_url_still_unresolved"
+                quality_df.at[idx, "_scrape_quality_note"] = str(
+                    summary.get("_scrape_prep_error", "") or ""
+                ).strip()
+                quality_df.at[idx, "_scrape_quality_reviewed_at"] = datetime.now(UTC).isoformat(
+                    timespec="seconds"
+                )
+                _save_quality_df(quality_df)
+                print_warning("Still unresolved after final URL update")
+                continue
+
+            if key == "r":
+                websites_df = _load_latest_websites_df(websites_path)
+                summary, error = _retry_scrape_for_org(org_id, websites_df, prep_path)
+                if error:
+                    quality_df.at[idx, "_scrape_quality_status"] = "pending"
+                    quality_df.at[idx, "_scrape_quality_reason"] = "retry_scrape_error"
+                    quality_df.at[idx, "_scrape_quality_note"] = error
+                    quality_df.at[idx, "_scrape_quality_reviewed_at"] = datetime.now(UTC).isoformat(
+                        timespec="seconds"
+                    )
+                    _save_quality_df(quality_df)
+                    print_warning(error)
+                    continue
+
+                flagged_after_retry = False
+                retry_detail = ""
+                manifest_path = DATA_DIR / "orgs" / org_id / "scrape" / "manifest.csv"
+                if manifest_path.exists():
+                    try:
+                        manifest_df = pd.read_csv(manifest_path, encoding="utf-8-sig")
+                    except Exception as e:
+                        flagged_after_retry = True
+                        retry_detail = f"manifest_read_error:{type(e).__name__}"
+                    else:
+                        (
+                            flagged_after_retry,
+                            _issue,
+                            _total_count,
+                            _low_count,
+                            _success_count,
+                            _detail,
+                        ) = _assess_scrape_quality(manifest_df)
+                        retry_detail = (
+                            f"attempted={summary.get('attempted', 0)}, "
+                            f"success={summary.get('success', 0)}, "
+                            f"failed={summary.get('failed', 0)}, "
+                            f"skipped={summary.get('skipped_existing', 0)}"
+                        )
+                else:
+                    flagged_after_retry = True
+                    retry_detail = f"manifest_missing:{manifest_path}"
+
+                if not flagged_after_retry:
+                    quality_df.at[idx, "_scrape_quality_status"] = "resolved"
+                    quality_df.at[idx, "_scrape_quality_reason"] = "retry_scrape_ready"
+                    quality_df.at[idx, "_scrape_quality_note"] = retry_detail
+                    quality_df.at[idx, "_scrape_quality_reviewed_at"] = datetime.now(UTC).isoformat(
+                        timespec="seconds"
+                    )
+                    _save_quality_df(quality_df)
+
+                    resolved += 1
+                    progress.mark_accepted()
+                    print_success("Scrape retry resolved row")
+                    break
+
+                quality_df.at[idx, "_scrape_quality_status"] = "pending"
+                quality_df.at[idx, "_scrape_quality_reason"] = "retry_scrape_still_unresolved"
+                quality_df.at[idx, "_scrape_quality_note"] = retry_detail
+                quality_df.at[idx, "_scrape_quality_reviewed_at"] = datetime.now(UTC).isoformat(
+                    timespec="seconds"
+                )
+                _save_quality_df(quality_df)
+                print_warning(f"Still unresolved after scrape retry ({retry_detail})")
+                continue
+
+        if quit_requested:
+            break
+
+    final_df = pd.read_csv(quality_path, encoding="utf-8-sig")
+    final_df = _ensure_scrape_quality_columns(final_df)
+    remaining_mask = ~final_df["_scrape_quality_status"].astype(str).str.strip().str.lower().isin(
+        {"resolved", "excluded"}
+    )
+    remaining = int(remaining_mask.sum())
+
+    clear()
+    print_summary(
+        "Scrape Quality Review Paused" if quit_requested else "Scrape Quality Review Complete",
+        [
+            ("Resolved", resolved),
+            ("Accepted as-is", accepted_as_is),
+            ("Excluded", excluded),
+            ("Skipped", progress.skipped),
+            ("Remaining in queue", remaining),
+            ("Quality file", str(quality_path)),
+            ("Websites file", str(websites_path)),
+        ],
+    )
+
+    return {
+        "resolved": resolved,
+        "accepted_as_is": accepted_as_is,
+        "excluded": excluded,
+        "remaining": remaining,
+    }
 
 
 def _save_location_decisions(
@@ -1544,20 +2242,7 @@ def review_scrape_readiness() -> dict[str, int]:
                     print_skip("Cancelled")
                     continue
 
-                websites_df = _load_latest_websites_df(websites_path)
-                timestamp = datetime.now(UTC).isoformat(timespec="seconds")
-                websites_df = _upsert_websites_row(
-                    websites_df,
-                    org_id,
-                    {
-                        "_excluded_reason": reason.value,
-                        "_excluded_reason_note": note,
-                        "_excluded_at": timestamp,
-                        "_website_origin": "manual_excluded",
-                        "_website_needs_review": False,
-                    },
-                )
-                _save_websites_df(websites_df, websites_path)
+                _exclude_org_in_websites(websites_path, org_id, reason, note)
 
                 _update_prep_readiness(
                     prep_path,
