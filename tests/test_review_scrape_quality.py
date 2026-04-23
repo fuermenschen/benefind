@@ -193,6 +193,21 @@ def test_build_scrape_quality_candidates_uses_primary_name_column(
     tmp_path,
 ) -> None:
     monkeypatch.setattr("benefind.review.DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        "benefind.review.load_latest_scrape_clean_summary",
+        lambda: pd.DataFrame(
+            [
+                {
+                    "_org_id": "org_name_1",
+                    "_scrape_clean_status": "ok",
+                    "_scrape_clean_issue": "",
+                    "_scrape_clean_detail": "",
+                    "_scrape_clean_usable_chars": 120,
+                    "_scrape_source_manifest_signature": "sig-1",
+                }
+            ]
+        ),
+    )
 
     org_id = "org_name_1"
     manifest_path = tmp_path / "orgs" / org_id / "scrape" / "manifest.csv"
@@ -222,6 +237,79 @@ def test_build_scrape_quality_candidates_uses_primary_name_column(
 
     assert len(candidates) == 1
     assert candidates.iloc[0]["_org_name"] == "Real Org Name"
+
+
+def test_build_scrape_quality_candidates_skips_when_clean_summary_missing_and_scrape_is_ok(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr("benefind.review.DATA_DIR", tmp_path)
+    monkeypatch.setattr("benefind.review.load_latest_scrape_clean_summary", lambda: pd.DataFrame())
+
+    org_id = "org_no_clean"
+    manifest_path = tmp_path / "orgs" / org_id / "scrape" / "manifest.csv"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "_prepared_url": "https://example.org/",
+                "_page_status": "success",
+                "_content_quality": "ok",
+                "_content_quality_reason": "",
+            }
+        ]
+    ).to_csv(manifest_path, index=False, encoding="utf-8-sig")
+
+    websites_df = pd.DataFrame([
+        {"_org_id": org_id, "Bezeichnung": "Org Missing Clean", "_excluded_reason": ""}
+    ])
+
+    candidates = _build_scrape_quality_candidates(websites_df)
+    assert candidates.empty
+
+
+def test_build_scrape_quality_candidates_flags_no_usable_cleaned_text(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr("benefind.review.DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        "benefind.review.load_latest_scrape_clean_summary",
+        lambda: pd.DataFrame(
+            [
+                {
+                    "_org_id": "org_zero_usable",
+                    "_scrape_clean_status": "ok",
+                    "_scrape_clean_issue": "",
+                    "_scrape_clean_detail": "",
+                    "_scrape_clean_usable_chars": 0,
+                    "_scrape_source_manifest_signature": "sig-zero",
+                }
+            ]
+        ),
+    )
+
+    org_id = "org_zero_usable"
+    manifest_path = tmp_path / "orgs" / org_id / "scrape" / "manifest.csv"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "_prepared_url": "https://example.org/",
+                "_page_status": "success",
+                "_content_quality": "ok",
+                "_content_quality_reason": "",
+            }
+        ]
+    ).to_csv(manifest_path, index=False, encoding="utf-8-sig")
+
+    websites_df = pd.DataFrame([
+        {"_org_id": org_id, "Bezeichnung": "Org Zero", "_excluded_reason": ""}
+    ])
+
+    candidates = _build_scrape_quality_candidates(websites_df)
+    assert len(candidates) == 1
+    assert candidates.iloc[0]["_scrape_quality_issue"] == "no_usable_cleaned_text"
 
 
 def test_ensure_scrape_quality_columns_converts_reason_to_writable_text_dtype() -> None:

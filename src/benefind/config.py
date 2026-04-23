@@ -55,6 +55,10 @@ class ScrapingConfig:
     prepare_sitemap_max_depth: int = 4
     prepare_fallback_max_visits: int = 120
     prepare_max_workers: int = 32
+    clean_min_segment_chars: int = 80
+    clean_min_duplicate_page_ratio: float = 0.6
+    clean_retain_one_duplicate_copy: bool = True
+    clean_min_usable_chars_per_org: int = 1
 
 
 @dataclass

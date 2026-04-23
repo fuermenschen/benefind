@@ -293,7 +293,12 @@ def _reset_scrape_artifacts(orgs_dir: Path) -> tuple[int, int, int]:
             continue
 
         touched = False
-        for scrape_subdir in (org_dir / "pages", org_dir / "scrape"):
+        for scrape_subdir in (
+            org_dir / "pages",
+            org_dir / "scrape",
+            org_dir / "pages_cleaned",
+            org_dir / "scrape_clean",
+        ):
             if not scrape_subdir.exists() or not scrape_subdir.is_dir():
                 continue
 
@@ -1426,7 +1431,8 @@ def scrape(
         console.print(
             make_panel(
                 "[bold red]This will permanently delete all scrape outputs[/bold red]\n"
-                "(per-org `pages/` and `scrape/` directories).\n\n"
+                "(per-org `pages/`, `scrape/`, `pages_cleaned/`, and\n"
+                "`scrape_clean/` directories).\n\n"
                 "[bold yellow]`scrape_prep/` data is kept.[/bold yellow]",
                 "Scrape Reset Confirmation",
                 border_style="red",
@@ -2454,6 +2460,173 @@ def normalize_urls_report(
         ]
         if conf_lines:
             console.print(make_panel("\n".join(conf_lines), "Suggestion confidence distribution"))
+
+
+@app.command(name="scrape-clean")
+def scrape_clean(
+    input_file: Path | None = typer.Option(
+        None,
+        "--input",
+        "-i",
+        help="Path to prepare-scraping summary CSV",
+    ),
+    subset: bool = typer.Option(
+        False,
+        "--subset",
+        help="Clean only a random subset of organizations.",
+    ),
+    subset_size: int = typer.Option(
+        10,
+        "--size",
+        "-n",
+        help="Number of organizations to include when --subset is enabled.",
+    ),
+    subset_seed: int | None = typer.Option(
+        None,
+        "--subset-seed",
+        help="Optional random seed used for --subset sampling (default: random each run).",
+    ),
+    debug_sample: bool = typer.Option(
+        False,
+        "--debug-sample",
+        help="Clean exactly one organization as a debug sample.",
+    ),
+    debug_seed: int | None = typer.Option(
+        None,
+        "--debug-seed",
+        help="Optional random seed for reproducible debug sample selection.",
+    ),
+    debug_org_id: str | None = typer.Option(
+        None,
+        "--debug-org-id",
+        help="Target a specific _org_id in debug sample mode.",
+    ),
+) -> None:
+    """Step 3d: Clean scraped markdown by removing intra-org duplicate segments."""
+    from benefind.config import DATA_DIR
+    from benefind.scrape_clean import clean_scraped_pages_for_org
+
+    settings = load_settings()
+    _setup_logging(settings.log_level)
+
+    input_path = input_file or (DATA_DIR / "filtered" / "organizations_scrape_prep.csv")
+    if not input_path.exists():
+        print_error(f"Input file not found: {input_path}")
+        console.print(
+            "Run [bold]benefind prepare-scraping[/bold] first or pass [bold]--input[/bold]."
+        )
+        raise typer.Exit(code=1)
+
+    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    if "_org_id" not in df.columns:
+        raise typer.BadParameter("Input CSV missing _org_id.")
+
+    if "_scrape_prep_status" in df.columns:
+        df = df[df["_scrape_prep_status"].astype(str).str.strip() == "ready"].copy()
+
+    if "_excluded_reason" in df.columns:
+        df = df[~has_exclusion_reason_series(df["_excluded_reason"])].copy()
+
+    df = df.drop_duplicates(subset="_org_id", keep="last")
+    if df.empty:
+        console.print("[yellow]No organizations available for scrape-clean.[/yellow]")
+        return
+
+    if subset and subset_size <= 0:
+        raise typer.BadParameter("--size/-n must be greater than 0 when --subset is used.")
+    if debug_org_id and not debug_sample:
+        raise typer.BadParameter("--debug-org-id requires --debug-sample.")
+    if subset and debug_sample:
+        raise typer.BadParameter("Use either --subset or --debug-sample, not both.")
+
+    sample_mode = "full"
+    effective_seed: int | str = "-"
+    selected_df = df
+
+    if debug_sample:
+        import random
+
+        sample_mode = "debug_sample"
+        if debug_org_id:
+            selected_df = df[df["_org_id"].astype(str).str.strip() == debug_org_id.strip()]
+            if selected_df.empty:
+                raise typer.BadParameter(
+                    f"No prepared organization found for --debug-org-id={debug_org_id!r}"
+                )
+            effective_seed = "-"
+        else:
+            effective_seed = (
+                debug_seed if debug_seed is not None else random.SystemRandom().randrange(1, 10**9)
+            )
+            selected_df = df.sample(n=1, random_state=effective_seed)
+    elif subset:
+        import random
+
+        sample_mode = "subset"
+        count = min(subset_size, len(df))
+        effective_seed = (
+            subset_seed if subset_seed is not None else random.SystemRandom().randrange(1, 10**9)
+        )
+        selected_df = df.sample(n=count, random_state=effective_seed)
+
+    if selected_df.empty:
+        console.print("[yellow]No organizations selected for scrape-clean.[/yellow]")
+        return
+
+    print_summary(
+        "Scrape Clean Plan",
+        [
+            ("Organizations selected", len(selected_df)),
+            ("Mode", sample_mode),
+            ("Sampling seed", effective_seed),
+            ("Min segment chars", int(settings.scraping.clean_min_segment_chars)),
+            (
+                "Min duplicate page ratio",
+                f"{float(settings.scraping.clean_min_duplicate_page_ratio):.2f}",
+            ),
+            (
+                "Keep canonical duplicate copy",
+                bool(settings.scraping.clean_retain_one_duplicate_copy),
+            ),
+        ],
+    )
+
+    cleaned_ok = 0
+    no_manifest = 0
+    no_success = 0
+    other = 0
+    total_removed_segments = 0
+    total_usable_chars = 0
+
+    for _, row in selected_df.iterrows():
+        org_id = str(row.get("_org_id", "") or "").strip()
+        if not org_id:
+            continue
+        result = clean_scraped_pages_for_org(org_id, settings)
+        status = str(result.get("_scrape_clean_status", "") or "").strip().lower()
+        if status == "ok":
+            cleaned_ok += 1
+        elif status == "no_manifest":
+            no_manifest += 1
+        elif status == "no_success_pages":
+            no_success += 1
+        else:
+            other += 1
+
+        total_removed_segments += int(result.get("_scrape_clean_segments_removed", 0) or 0)
+        total_usable_chars += int(result.get("_scrape_clean_usable_chars", 0) or 0)
+
+    print_summary(
+        "Scrape Clean Results",
+        [
+            ("Organizations cleaned", cleaned_ok),
+            ("No manifest", no_manifest),
+            ("No success pages", no_success),
+            ("Other status", other),
+            ("Segments removed", total_removed_segments),
+            ("Total usable chars", total_usable_chars),
+        ],
+    )
 
 
 @app.command()

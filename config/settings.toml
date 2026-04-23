@@ -65,6 +65,20 @@ prepare_fallback_max_visits = 120
 # Concurrent organization-level workers for prepare-scraping
 prepare_max_workers = 32
 
+# Post-scrape cleaning: segment-level dedup across pages within one organization
+# Segments shorter than this are never considered for duplicate removal
+clean_min_segment_chars = 80
+
+# Duplicate segment must appear in at least this page ratio for removal
+# (and at least 2 pages overall)
+clean_min_duplicate_page_ratio = 0.6
+
+# Keep one canonical copy of duplicate segments in the first page
+clean_retain_one_duplicate_copy = true
+
+# If cleaned unique text falls below this threshold, quality review can flag it
+clean_min_usable_chars_per_org = 1
+
 [search]
 # Search provider: "brave"
 provider = "brave"

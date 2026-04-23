@@ -22,9 +22,11 @@ benefind takes the official Canton Zurich list of tax-exempt nonprofit organizat
 1. **Parses** the PDF into structured data
 2. **Filters** to organizations in Bezirk Winterthur
 3. **Discovers** each organization's website via search
-4. **Scrapes** key pages (respecting robots.txt)
-5. **Evaluates** each organization against configurable criteria using targeted LLM prompts
-6. **Generates** a summary report for human decision-making
+4. **Prepares + reviews scrape readiness** to ensure safe URL targets
+5. **Scrapes** key pages (respecting robots.txt)
+6. **Reviews scrape quality**, then **cleans duplicate intra-org content segments**
+7. **Evaluates** each organization against configurable criteria using targeted LLM prompts
+8. **Generates** a summary report for human decision-making
 
 Wherever uncertainty arises, items are flagged for manual review rather than silently decided.
 

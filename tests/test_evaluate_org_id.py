@@ -65,3 +65,35 @@ def test_evaluate_batch_missing_org_id_is_explicit_error(
 
     assert len(results) == 1
     assert results[0]["_error"] == "missing_org_id"
+
+
+def test_load_scraped_content_prefers_pages_cleaned(tmp_path: Path) -> None:
+    org_dir = tmp_path / "orgs" / "org_x"
+    (org_dir / "pages").mkdir(parents=True, exist_ok=True)
+    (org_dir / "pages_cleaned").mkdir(parents=True, exist_ok=True)
+
+    (org_dir / "pages" / "001.md").write_text("raw-content", encoding="utf-8")
+    (org_dir / "pages_cleaned" / "001.md").write_text("cleaned-content", encoding="utf-8")
+
+    content = evaluate.load_scraped_content(org_dir)
+    assert "cleaned-content" in content
+    assert "raw-content" not in content
+
+
+def test_load_scraped_content_falls_back_to_pages(tmp_path: Path) -> None:
+    org_dir = tmp_path / "orgs" / "org_y"
+    (org_dir / "pages").mkdir(parents=True, exist_ok=True)
+    (org_dir / "pages" / "001.md").write_text("raw-fallback", encoding="utf-8")
+
+    content = evaluate.load_scraped_content(org_dir)
+    assert "raw-fallback" in content
+
+
+def test_load_scraped_content_falls_back_when_pages_cleaned_is_empty(tmp_path: Path) -> None:
+    org_dir = tmp_path / "orgs" / "org_z"
+    (org_dir / "pages_cleaned").mkdir(parents=True, exist_ok=True)
+    (org_dir / "pages").mkdir(parents=True, exist_ok=True)
+    (org_dir / "pages" / "001.md").write_text("raw-present", encoding="utf-8")
+
+    content = evaluate.load_scraped_content(org_dir)
+    assert "raw-present" in content

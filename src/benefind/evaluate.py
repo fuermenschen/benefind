@@ -37,8 +37,17 @@ def load_scraped_content(org_dir: Path, max_chars: int = 30_000) -> str:
     Concatenates all .md files in the pages/ subdirectory. Truncates to
     max_chars to stay within LLM context limits.
     """
-    pages_dir = org_dir / "pages"
-    if not pages_dir.exists():
+    candidate_dirs = [org_dir / "pages_cleaned", org_dir / "pages"]
+    pages_dir: Path | None = None
+    for candidate in candidate_dirs:
+        if not candidate.exists():
+            continue
+        has_markdown = any(path.is_file() for path in candidate.glob("*.md"))
+        if has_markdown:
+            pages_dir = candidate
+            break
+
+    if pages_dir is None:
         return ""
 
     parts = []

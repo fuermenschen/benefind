@@ -45,6 +45,7 @@ from benefind.prepare_scraping import (
     load_prepare_summary,
     prepare_scraping_batch,
 )
+from benefind.scrape_clean import load_latest_scrape_clean_summary
 
 LOCATION_DECISIONS_PATH = DATA_DIR / "filtered" / "location_review_decisions.csv"
 NAME_COLUMN_CANDIDATES = [
@@ -699,6 +700,18 @@ def _retry_scrape_for_org(
 def _build_scrape_quality_candidates(websites_df: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     active_df = websites_df.copy()
+    clean_summary_df = load_latest_scrape_clean_summary()
+    clean_summary_by_org: dict[str, pd.Series] = {}
+    if not clean_summary_df.empty:
+        clean_summary_df = clean_summary_df.drop_duplicates(subset="_org_id", keep="last")
+        clean_summary_by_org = {
+            str(row.get("_org_id", "") or "").strip(): row
+            for _, row in clean_summary_df.iterrows()
+            if str(row.get("_org_id", "") or "").strip()
+        }
+
+    settings = load_settings()
+    min_usable_chars = int(settings.scraping.clean_min_usable_chars_per_org)
     name_column = _detect_first_column(active_df, NAME_COLUMN_CANDIDATES, default="")
     if "_excluded_reason" not in active_df.columns:
         active_df["_excluded_reason"] = ""
@@ -739,8 +752,42 @@ def _build_scrape_quality_candidates(websites_df: pd.DataFrame) -> pd.DataFrame:
         flagged, issue, total_count, low_count, success_count, detail = _assess_scrape_quality(
             manifest_df
         )
+
+        clean_row = clean_summary_by_org.get(org_id)
+        clean_issue = ""
+        clean_detail = ""
+        clean_signature = ""
+        if clean_row is not None:
+            clean_status = str(clean_row.get("_scrape_clean_status", "") or "").strip().lower()
+            clean_issue_raw = str(clean_row.get("_scrape_clean_issue", "") or "").strip()
+            clean_detail_raw = str(clean_row.get("_scrape_clean_detail", "") or "").strip()
+            clean_usable_chars = int(float(clean_row.get("_scrape_clean_usable_chars", 0) or 0))
+            clean_signature = str(
+                clean_row.get("_scrape_source_manifest_signature", "") or ""
+            ).strip()
+
+            if clean_status not in {"ok", ""}:
+                clean_issue = clean_issue_raw or clean_status
+                clean_detail = clean_detail_raw
+            elif clean_usable_chars < min_usable_chars:
+                clean_issue = "no_usable_cleaned_text"
+                clean_detail = f"usable_chars={clean_usable_chars} < min={min_usable_chars}"
+
+        if clean_issue and not flagged:
+            flagged = True
+            issue = clean_issue
+            detail = clean_detail
+        elif clean_issue and flagged:
+            detail_parts = [part for part in [detail, f"clean:{clean_issue}", clean_detail] if part]
+            detail = "; ".join(detail_parts)
+
         if not flagged:
             continue
+
+        signature = (
+            f"{issue}|{detail}|{total_count}|{low_count}|{success_count}|"
+            f"{int(manifest_path.stat().st_mtime_ns)}|{clean_signature}"
+        )
 
         rows.append(
             {
@@ -753,10 +800,7 @@ def _build_scrape_quality_candidates(websites_df: pd.DataFrame) -> pd.DataFrame:
                 "_scrape_quality_success_pages": success_count,
                 "_scrape_quality_manifest_path": str(manifest_path),
                 "_scrape_quality_manifest_mtime": str(int(manifest_path.stat().st_mtime_ns)),
-                "_scrape_quality_signature": (
-                    f"{issue}|{detail}|{total_count}|{low_count}|{success_count}|"
-                    f"{int(manifest_path.stat().st_mtime_ns)}"
-                ),
+                "_scrape_quality_signature": signature,
             }
         )
 
@@ -855,6 +899,13 @@ def review_scrape_quality() -> dict[str, int]:
     if websites_df.empty:
         console.print("[yellow]No organizations found in websites CSV.[/yellow]")
         return {"resolved": 0, "accepted_as_is": 0, "excluded": 0, "remaining": 0}
+
+    clean_summary_df = load_latest_scrape_clean_summary()
+    if clean_summary_df.empty:
+        console.print(
+            "[yellow]No scrape-clean summary found. Running scrape-quality review "
+            "without cleaned-text signals.[/yellow]"
+        )
 
     candidates_df = _build_scrape_quality_candidates(websites_df)
     if candidates_df.empty:

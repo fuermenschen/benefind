@@ -11,6 +11,8 @@ uv run benefind review-url-normalization
 uv run benefind prepare-scraping
 uv run benefind review scrape-readiness
 uv run benefind scrape
+uv run benefind review scrape-quality
+uv run benefind scrape-clean
 uv run benefind evaluate
 uv run benefind report
 ```
@@ -26,7 +28,9 @@ uv run benefind review-url-normalization # Step 3b-review: decide final URL per 
 uv run benefind prepare-scraping        # Step 3c: robots/scope URL planning + ranking
 uv run benefind review scrape-readiness # Step 3c-review: resolve blocked/seed-unreachable prep rows
 uv run benefind scrape      # Step 3d: Scrape websites
-uv run benefind evaluate    # Step 3e: LLM evaluation
+uv run benefind review scrape-quality   # Step 3d-review: review no/poor scrape outcomes
+uv run benefind scrape-clean # Step 3e: remove duplicate intra-org content segments
+uv run benefind evaluate    # Step 3f: LLM evaluation
 uv run benefind report      # Step 4: Generate report
 ```
 
@@ -42,6 +46,8 @@ uv run benefind review-url-normalization
 uv run benefind prepare-scraping
 uv run benefind review scrape-readiness
 uv run benefind scrape
+uv run benefind review scrape-quality
+uv run benefind scrape-clean
 uv run benefind evaluate
 ```
 
@@ -57,6 +63,8 @@ uv run benefind review-url-normalization
 uv run benefind prepare-scraping
 uv run benefind review scrape-readiness
 uv run benefind scrape
+uv run benefind review scrape-quality
+uv run benefind scrape-clean
 uv run benefind evaluate
 ```
 
@@ -191,10 +199,19 @@ Every website decision is persisted immediately.
 - `uv run benefind scrape --reset` (interactive wipe of scrape outputs only; keeps `scrape_prep/`)
 - `uv run benefind scrape --verbose`
 
-After scraping, run `uv run benefind review scrape-quality` to process organizations
+After scraping, run `uv run benefind review scrape-quality` first to process organizations
 with no successful scrape pages or only low-quality pages. Actions mirror scrape-readiness
 review: retry scrape, set final URL and re-prepare, exclude with predefined reason,
-accept as-is, skip, or quit.
+accept as-is, skip, or quit. Then run `uv run benefind scrape-clean` to build cleaned
+artifacts for downstream evaluation.
+
+`benefind scrape-clean` behavior highlights:
+
+- keeps raw scraped markdown in `data/orgs/<_org_id>/pages/` untouched
+- writes cleaned pages to `data/orgs/<_org_id>/pages_cleaned/`
+- removes exact duplicate segments across pages within the same org while keeping one canonical copy
+- writes audit metadata to `data/orgs/<_org_id>/scrape_clean/` and summary rows to
+  `data/filtered/organizations_scrape_clean_summary.csv`
 
 Scrape execution policy highlights:
 
@@ -211,7 +228,7 @@ Scrape execution policy highlights:
 Evaluate/report artifact alignment:
 
 - `benefind evaluate` now requires `_org_id` in input rows and reads scrape artifacts from
-  `data/orgs/<_org_id>/pages/` only
+  `data/orgs/<_org_id>/pages_cleaned/` first, with fallback to `data/orgs/<_org_id>/pages/`
 - `benefind report` collects evaluations from active `_org_id` rows in
   `data/filtered/organizations_with_websites.csv`
 - if that CSV is missing or has no active rows, report falls back to available `_org_id`
@@ -248,7 +265,7 @@ run a quick alignment check before relying on downstream outputs:
   `_website_origin`, score/decision metadata)
 - verify exclusion semantics still match expectations for `scrape` and `evaluate`
   (excluded rows should be skipped)
-- run `discover -> review websites -> normalize-urls -> review-url-normalization -> prepare-scraping -> scrape -> evaluate -> report` on a small
+- run `discover -> review websites -> normalize-urls -> review-url-normalization -> prepare-scraping -> scrape -> review scrape-quality -> scrape-clean -> evaluate -> report` on a small
   subset first and inspect artifacts under `data/orgs/` and `data/reports/`
 - if schema assumptions changed, update step-local logic and docs in one pass
 
