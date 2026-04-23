@@ -684,6 +684,7 @@ def _retry_scrape_for_org(
         urls,
         settings,
         refresh_existing=True,
+        playwright_headless=False,
     )
 
     summary = {

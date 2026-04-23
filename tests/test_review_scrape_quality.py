@@ -8,6 +8,7 @@ from benefind.review import (
     _build_scrape_quality_candidates,
     _ensure_scrape_quality_columns,
     _reset_stale_scrape_quality_statuses,
+    _retry_scrape_for_org,
 )
 
 
@@ -240,3 +241,41 @@ def test_ensure_scrape_quality_columns_converts_reason_to_writable_text_dtype() 
 
     assert normalized.at[0, "_scrape_quality_reason"] == "retry_scrape_ready"
     assert normalized.at[0, "_scrape_quality_status"] == "resolved"
+
+
+def test_retry_scrape_for_org_uses_headed_playwright(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    prep_path = tmp_path / "filtered" / "organizations_scrape_prep.csv"
+    prep_path.parent.mkdir(parents=True, exist_ok=True)
+    prep_path.write_text("_org_id,_scrape_targets_file\norg_1,/tmp/targets.csv\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "benefind.review._load_latest_prep_df",
+        lambda _path: pd.DataFrame(
+            [{"_org_id": "org_1", "_scrape_targets_file": "/tmp/targets.csv"}]
+        ),
+    )
+    monkeypatch.setattr("benefind.review.load_org_targets", lambda _path: ["https://example.org/"])
+
+    called: dict[str, object] = {}
+
+    class _FakeResult:
+        attempted_count = 1
+        success_count = 1
+        failed_count = 0
+        skipped_success_count = 0
+
+    def fake_scrape_org_urls(*args, **kwargs):
+        called.update(kwargs)
+        return _FakeResult()
+
+    monkeypatch.setattr("benefind.scrape.scrape_organization_urls", fake_scrape_org_urls)
+
+    websites_df = pd.DataFrame([{"_org_id": "org_1", "Bezeichnung": "Org One"}])
+    summary, error = _retry_scrape_for_org("org_1", websites_df, prep_path)
+
+    assert error == ""
+    assert summary == {"attempted": 1, "success": 1, "failed": 0, "skipped_existing": 0}
+    assert called.get("playwright_headless") is False

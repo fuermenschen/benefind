@@ -518,6 +518,7 @@ def _render_page_playwright(
     *,
     user_agent: str,
     timeout_seconds: int,
+    headless: bool = True,
 ) -> PlaywrightRenderResult:
     if sync_playwright is None:
         return PlaywrightRenderResult(
@@ -531,7 +532,7 @@ def _render_page_playwright(
 
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+            browser = playwright.chromium.launch(headless=headless)
             try:
                 context = browser.new_context(user_agent=user_agent or None)
                 try:
@@ -640,23 +641,115 @@ def _is_playwright_infrastructure_failure(detail: str) -> bool:
     return any(indicator in text for indicator in indicators)
 
 
+def _playwright_fallback_from_http_failure(
+    *,
+    url: str,
+    user_agent: str,
+    timeout_seconds: int,
+    failure_reason_code: str,
+    failure_detail: str,
+    http_status: int | None,
+    content_type: str,
+    final_url: str,
+    playwright_headless: bool,
+) -> PageScrapeResult:
+    render_result = _render_page_playwright(
+        url,
+        user_agent=user_agent,
+        timeout_seconds=timeout_seconds,
+        headless=playwright_headless,
+    )
+    if render_result.status != "success":
+        detail_parts = [str(failure_detail or "").strip(), render_result.failure_detail]
+        merged_detail = "; ".join(part for part in detail_parts if part)
+        return PageScrapeResult(
+            status="failed",
+            failure_reason_code=failure_reason_code,
+            failure_detail=merged_detail,
+            http_status=http_status,
+            content_type=content_type,
+            content="",
+            extractor_selected="",
+            extractor_score=0,
+            extractor_score_static_best=0,
+            extractor_score_render_best=0,
+            fetch_mode="playwright",
+            render_trigger_reason=f"http_failure_fallback:{failure_reason_code}",
+            final_url=final_url,
+        )
+
+    rendered_metadata = _extract_metadata(render_result.html)
+    extractor_name, extracted_content, extractor_score = _select_best_extractor(
+        render_result.html,
+        rendered_metadata,
+        preferred_extractor=None,
+    )
+
+    selected_content = extracted_content
+    if not selected_content:
+        selected_content = _minimal_content_from_metadata(
+            rendered_metadata,
+            final_url=render_result.final_url or final_url or url,
+            content_type=content_type,
+            note=f"http_failure_fallback:{failure_reason_code}",
+        )
+
+    quality, quality_reason = _quality_from_score(
+        extractor_score,
+        base_reason=f"http_failure_fallback:{failure_reason_code}",
+    )
+    return PageScrapeResult(
+        status="success",
+        failure_reason_code="",
+        failure_detail="",
+        http_status=http_status,
+        content_type=content_type,
+        content=selected_content,
+        extractor_selected=extractor_name,
+        extractor_score=extractor_score,
+        extractor_score_static_best=0,
+        extractor_score_render_best=extractor_score,
+        content_quality=quality,
+        content_quality_reason=quality_reason,
+        fetch_mode="playwright",
+        render_trigger_reason=f"http_failure_fallback:{failure_reason_code}",
+        final_url=render_result.final_url or final_url,
+        metadata_title=rendered_metadata.get("title", ""),
+        metadata_description=rendered_metadata.get("description", ""),
+        metadata_canonical=rendered_metadata.get("canonical", ""),
+        metadata_lang=rendered_metadata.get("lang", ""),
+    )
+
+
 def _scrape_page_static(
     client: httpx.Client,
     url: str,
     *,
     preferred_extractor: str | None = None,
+    playwright_headless: bool = True,
 ) -> PageScrapeResult:
+    timeout_seconds = 30
+    try:
+        read_timeout = getattr(client.timeout, "read", None)
+        if read_timeout is not None:
+            timeout_seconds = int(read_timeout)
+    except Exception:
+        timeout_seconds = 30
+
     try:
         response = client.get(url)
     except Exception as exc:
         code, detail = _classify_exception(exc)
-        return PageScrapeResult(
-            status="failed",
+        return _playwright_fallback_from_http_failure(
+            url=url,
+            user_agent=str(client.headers.get("User-Agent", "") or ""),
+            timeout_seconds=timeout_seconds,
             failure_reason_code=code,
             failure_detail=detail,
             http_status=None,
             content_type="",
-            content="",
+            final_url=url,
+            playwright_headless=playwright_headless,
         )
 
     status_code = int(response.status_code)
@@ -664,63 +757,55 @@ def _scrape_page_static(
     response_final_url = str(response.url or "").strip()
 
     if status_code == 401:
-        return PageScrapeResult(
-            status="failed",
+        return _playwright_fallback_from_http_failure(
+            url=url,
+            user_agent=str(client.headers.get("User-Agent", "") or ""),
+            timeout_seconds=timeout_seconds,
             failure_reason_code="http_401",
             failure_detail="",
             http_status=status_code,
             content_type=content_type,
-            content="",
-            extractor_selected="",
-            extractor_score=0,
-            extractor_score_static_best=0,
-            extractor_score_render_best=None,
             final_url=response_final_url,
+            playwright_headless=playwright_headless,
         )
 
     if status_code == 403:
-        return PageScrapeResult(
-            status="failed",
+        return _playwright_fallback_from_http_failure(
+            url=url,
+            user_agent=str(client.headers.get("User-Agent", "") or ""),
+            timeout_seconds=timeout_seconds,
             failure_reason_code="http_403",
             failure_detail="",
             http_status=status_code,
             content_type=content_type,
-            content="",
-            extractor_selected="",
-            extractor_score=0,
-            extractor_score_static_best=0,
-            extractor_score_render_best=None,
             final_url=response_final_url,
+            playwright_headless=playwright_headless,
         )
 
     if status_code >= 500:
-        return PageScrapeResult(
-            status="failed",
+        return _playwright_fallback_from_http_failure(
+            url=url,
+            user_agent=str(client.headers.get("User-Agent", "") or ""),
+            timeout_seconds=timeout_seconds,
             failure_reason_code="http_5xx",
             failure_detail="",
             http_status=status_code,
             content_type=content_type,
-            content="",
-            extractor_selected="",
-            extractor_score=0,
-            extractor_score_static_best=0,
-            extractor_score_render_best=None,
             final_url=response_final_url,
+            playwright_headless=playwright_headless,
         )
 
     if status_code != 200:
-        return PageScrapeResult(
-            status="failed",
+        return _playwright_fallback_from_http_failure(
+            url=url,
+            user_agent=str(client.headers.get("User-Agent", "") or ""),
+            timeout_seconds=timeout_seconds,
             failure_reason_code="http_other",
             failure_detail=f"http_{status_code}",
             http_status=status_code,
             content_type=content_type,
-            content="",
-            extractor_selected="",
-            extractor_score=0,
-            extractor_score_static_best=0,
-            extractor_score_render_best=None,
             final_url=response_final_url,
+            playwright_headless=playwright_headless,
         )
 
     if "text/html" not in content_type.lower():
@@ -768,14 +853,6 @@ def _scrape_page_static(
     )
 
     if extractor_score < ACCEPTABLE_EXTRACTION_SCORE:
-        timeout_seconds = 30
-        try:
-            read_timeout = getattr(client.timeout, "read", None)
-            if read_timeout is not None:
-                timeout_seconds = int(read_timeout)
-        except Exception:
-            timeout_seconds = 30
-
         render_trigger_reason = _build_render_trigger_reason(response.text, extracted_content)
         if ":markers=" in render_trigger_reason:
             logger.debug(
@@ -789,6 +866,7 @@ def _scrape_page_static(
             url,
             user_agent=str(client.headers.get("User-Agent", "") or ""),
             timeout_seconds=timeout_seconds,
+            headless=playwright_headless,
         )
 
         if render_result.status != "success":
@@ -1019,6 +1097,7 @@ def scrape_organization_urls(
     *,
     refresh_existing: bool = False,
     run_id: str | None = None,
+    playwright_headless: bool = True,
 ) -> ScrapeOrgResult:
     """Scrape prepared URLs for one organization and maintain URL-level manifest."""
     org_id_norm = str(org_id or "").strip()
@@ -1095,11 +1174,19 @@ def scrape_organization_urls(
                 continue
 
             attempted_count += 1
-            page_result = _scrape_page_static(
-                client,
-                url,
-                preferred_extractor=org_extractor,
-            )
+            if playwright_headless:
+                page_result = _scrape_page_static(
+                    client,
+                    url,
+                    preferred_extractor=org_extractor,
+                )
+            else:
+                page_result = _scrape_page_static(
+                    client,
+                    url,
+                    preferred_extractor=org_extractor,
+                    playwright_headless=False,
+                )
             attempt_count = _attempt_count(manifest_df, url) + 1
             saved_path = ""
 

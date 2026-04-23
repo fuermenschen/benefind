@@ -375,7 +375,9 @@ def test_scrape_page_prefers_static_content_on_equal_score_tie(
     assert result.extractor_score_render_best == 0
 
 
-def test_scrape_page_http_other_status_returns_http_other_code() -> None:
+def test_scrape_page_http_other_status_returns_http_other_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             404,
@@ -383,12 +385,22 @@ def test_scrape_page_http_other_status_returns_http_other_code() -> None:
             text="<html><body>Not found</body></html>",
         )
 
+    def fake_render(*_args, **_kwargs) -> scrape.PlaywrightRenderResult:
+        return scrape.PlaywrightRenderResult(
+            status="failed",
+            html="",
+            final_url="",
+            failure_detail="render_failed",
+        )
+
+    monkeypatch.setattr(scrape, "_render_page_playwright", fake_render)
+
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         result = scrape._scrape_page_static(client, "https://example.org/missing")
 
     assert result.status == "failed"
     assert result.failure_reason_code == "http_other"
-    assert result.failure_detail == "http_404"
+    assert "http_404" in result.failure_detail
 
 
 def test_render_trigger_reason_includes_js_markers() -> None:
@@ -405,7 +417,7 @@ def test_render_trigger_reason_includes_js_markers() -> None:
     assert "noscript_js_required" in reason
 
 
-def test_scrape_page_http_403_never_calls_playwright(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_scrape_page_http_403_tries_playwright(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             403,
@@ -431,4 +443,46 @@ def test_scrape_page_http_403_never_calls_playwright(monkeypatch: pytest.MonkeyP
 
     assert result.status == "failed"
     assert result.failure_reason_code == "http_403"
-    assert called["render"] is False
+    assert called["render"] is True
+
+
+def test_scrape_page_http_403_can_succeed_via_playwright(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            headers={"content-type": "text/html"},
+            text="<html><body>Forbidden</body></html>",
+        )
+
+    monkeypatch.setattr(
+        scrape,
+        "_render_page_playwright",
+        lambda *_args, **_kwargs: scrape.PlaywrightRenderResult(
+            status="success",
+            html=(
+                "<html><head><title>Rendered</title>"
+                "<meta name='description' content='Desc'></head>"
+                "<body><h1>Hello</h1><p>This page is visible in browser.</p></body></html>"
+            ),
+            final_url="https://example.org/private",
+            failure_detail="",
+        ),
+    )
+    monkeypatch.setattr(
+        scrape,
+        "_select_best_extractor",
+        lambda *_args, **_kwargs: (
+            "trafilatura",
+            "# Hello\n\nThis page is visible in browser.",
+            42,
+        ),
+    )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = scrape._scrape_page_static(client, "https://example.org/private")
+
+    assert result.status == "success"
+    assert result.fetch_mode == "playwright"
+    assert result.failure_reason_code == ""
+    assert result.extractor_score == 42
+    assert "http_failure_fallback:http_403" in result.render_trigger_reason
