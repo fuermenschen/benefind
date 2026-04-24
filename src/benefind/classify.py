@@ -7,9 +7,11 @@ import json
 import os
 import re
 import tomllib
+import webbrowser
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import pandas as pd
 
@@ -19,15 +21,14 @@ from benefind.cli_ui import (
     C_SCORE_HIGH,
     C_SCORE_LOW,
     C_SCORE_MED,
-    ask_text,
     clear,
     confirm,
     console,
     make_actions_table,
     make_kv_table,
     make_panel,
-    print_skip,
     print_success,
+    print_warning,
     wait_for_key,
 )
 from benefind.config import CONFIG_DIR, DATA_DIR, Settings, render_prompt_template
@@ -828,6 +829,15 @@ def review_classifications(
     interactive: bool,
     save_callback=None,
 ) -> dict[str, int]:
+    def open_url(url: str) -> bool:
+        value = str(url or "").strip()
+        if not value:
+            return False
+        try:
+            return bool(webbrowser.open(value))
+        except Exception:
+            return False
+
     def fmt_float_conf(value: object) -> str:
         try:
             score = float(value)
@@ -882,7 +892,7 @@ def review_classifications(
         stats["remaining"] = len(queue_indices)
         return stats
 
-    valid_keys = ["a", "x", "u", "v", "s", "q"]
+    valid_keys = ["a", "x", "w", "f", "v", "s", "q"]
     for pos, idx in enumerate(queue_indices, start=1):
         row = df.loc[idx]
         org_id = str(row.get("_org_id", "") or "").strip()
@@ -914,6 +924,11 @@ def review_classifications(
         auto_result_at = str(row.get(cols["auto_result_at"], "") or "")
         review_result = str(row.get(cols["review_result"], "") or "")
         review_result_at = str(row.get(cols["review_result_at"], "") or "")
+        website_url = str(row.get("_website_url_final", "") or "").strip() or str(
+            row.get("_website_url", "") or ""
+        ).strip()
+        zefix_purpose = str(row.get("_zefix_purpose", "") or "").strip()
+        zefix_status = str(row.get("_zefix_status", "") or "").strip()
 
         primary_focus = str(normalized_payload.get("primary_focus", "") or "")
         service_mode = str(normalized_payload.get("service_mode", "") or "")
@@ -948,6 +963,10 @@ def review_classifications(
             org_rows = [
                 ("Name", f"[{C_PRIMARY}]{org_name}[/{C_PRIMARY}]"),
                 ("Org ID", f"[{C_MUTED}]{org_id or '-'}[/{C_MUTED}]"),
+                (
+                    "Website",
+                    website_url if website_url else f"[{C_MUTED}]-[/{C_MUTED}]",
+                ),
                 ("Auto result", f"[bold]{auto_result or '-'}[/bold]"),
                 (
                     "Auto decided at",
@@ -982,6 +1001,22 @@ def review_classifications(
                 ),
             ]
             console.print(make_panel(make_kv_table(pred_rows), "LLM Classification"))
+
+            zefix_rows = [
+                (
+                    "ZEFIX status",
+                    zefix_status if zefix_status else f"[{C_MUTED}]-[/{C_MUTED}]",
+                ),
+                (
+                    "ZEFIX purpose",
+                    (
+                        zefix_purpose[:800] + "..."
+                        if len(zefix_purpose) > 800
+                        else (zefix_purpose or f"[{C_MUTED}]-[/{C_MUTED}]")
+                    ),
+                ),
+            ]
+            console.print(make_panel(make_kv_table(zefix_rows), "Registry Context"))
 
             reason_panel = review_reason_text(auto_result, normalized_payload)
             console.print(
@@ -1018,7 +1053,8 @@ def review_classifications(
                         [
                             ("a", "accept in scope"),
                             ("x", "mark excluded"),
-                            ("u", "keep pending"),
+                            ("w", "open website"),
+                            ("f", "search org on web"),
                             (
                                 "v",
                                 "toggle snippet context",
@@ -1043,25 +1079,25 @@ def review_classifications(
             if key == "s":
                 stats["skipped"] += 1
                 break
+            if key == "w":
+                if not website_url:
+                    print_warning("No website URL available.")
+                elif open_url(website_url):
+                    print_success(f"Opened website: {website_url}")
+                else:
+                    print_warning(f"Could not open browser. URL: {website_url}")
+                continue
+            if key == "f":
+                query = quote_plus(org_name.strip())
+                search_url = f"https://www.google.com/search?q={query}"
+                if open_url(search_url):
+                    print_success(f"Opened search: {search_url}")
+                else:
+                    print_warning(f"Could not open browser. URL: {search_url}")
+                continue
             if key == "v":
                 show_full_snippets = not show_full_snippets
                 continue
-            if key == "u":
-                note = ask_text("Optional note")
-                review_payload = {
-                    "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
-                    "question_id": question.id,
-                    "org_id": org_id,
-                    "decision": "pending",
-                    "note": note,
-                }
-                review_path = classify_org_dir(org_id, question.id) / "review.json"
-                write_org_artifact(review_path, review_payload)
-                if save_callback is not None:
-                    save_callback()
-                stats["skipped"] += 1
-                print_skip("Kept pending")
-                break
             if key == "a":
                 if not confirm("Accept as in-scope?", default=True):
                     continue
