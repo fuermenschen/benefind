@@ -15,11 +15,16 @@ import pandas as pd
 
 from benefind.cli_ui import (
     C_MUTED,
+    C_PRIMARY,
+    C_SCORE_HIGH,
+    C_SCORE_LOW,
+    C_SCORE_MED,
     ask_text,
     clear,
     confirm,
     console,
     make_actions_table,
+    make_kv_table,
     make_panel,
     print_skip,
     print_success,
@@ -823,6 +828,45 @@ def review_classifications(
     interactive: bool,
     save_callback=None,
 ) -> dict[str, int]:
+    def fmt_float_conf(value: object) -> str:
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            return f"[{C_MUTED}]-[/{C_MUTED}]"
+        if score >= 0.8:
+            color = C_SCORE_HIGH
+        elif score >= 0.6:
+            color = C_SCORE_MED
+        else:
+            color = C_SCORE_LOW
+        return f"[{color}]{score:.2f}[/{color}]"
+
+    def compact_list(value: object) -> str:
+        if not isinstance(value, list) or not value:
+            return f"[{C_MUTED}]-[/{C_MUTED}]"
+        return ", ".join(str(item) for item in value)
+
+    def review_reason_text(auto_result: str, payload: dict[str, object]) -> str:
+        primary_focus = str(payload.get("primary_focus", "") or "")
+        service_mode = str(payload.get("service_mode", "") or "")
+        primary_focus_conf = float(payload.get("primary_focus_confidence", 0.0) or 0.0)
+        confidence = float(payload.get("confidence", 0.0) or 0.0)
+        secondary = payload.get("secondary_focuses", [])
+
+        if auto_result == "waiting_for_clean_text":
+            return "Missing usable cleaned text; classify ask could not run."
+        if primary_focus == "education":
+            return "Education focus is always routed to manual review."
+        if primary_focus not in {"humans", "unknown", "mixed", "other", "education"} and (
+            isinstance(secondary, list) and "humans" in secondary
+        ):
+            return "Non-human primary focus but humans appear as secondary focus."
+        if primary_focus_conf >= 0.8 and confidence <= 0.6:
+            return "Focus confidence and overall confidence are conflicting."
+        if service_mode in {"unknown", "mixed", "indirect_only"}:
+            return "Service mode is not clearly direct human support."
+        return "Rule-based safety routing to manual review."
+
     cols = question_columns(question.id)
     stats = {
         "accepted": 0,
@@ -838,7 +882,7 @@ def review_classifications(
         stats["remaining"] = len(queue_indices)
         return stats
 
-    valid_keys = ["a", "x", "u", "s", "q"]
+    valid_keys = ["a", "x", "u", "v", "s", "q"]
     for pos, idx in enumerate(queue_indices, start=1):
         row = df.loc[idx]
         org_id = str(row.get("_org_id", "") or "").strip()
@@ -867,30 +911,123 @@ def review_classifications(
         )
 
         auto_result = str(row.get(cols["auto_result"], "") or "-")
-        payload_text = (
-            json.dumps(normalized_payload, ensure_ascii=False) if normalized_payload else "-"
-        )
-        details = (
-            f"[bold]{org_name}[/bold]\n"
-            f"org_id: {org_id or '-'}\n"
-            f"auto_result: {auto_result}\n"
-            f"payload: {payload_text}"
-        )
+        auto_result_at = str(row.get(cols["auto_result_at"], "") or "")
+        review_result = str(row.get(cols["review_result"], "") or "")
+        review_result_at = str(row.get(cols["review_result_at"], "") or "")
+
+        primary_focus = str(normalized_payload.get("primary_focus", "") or "")
+        service_mode = str(normalized_payload.get("service_mode", "") or "")
+        reason = str(normalized_payload.get("reason", "") or "")
+        primary_focus_conf = normalized_payload.get("primary_focus_confidence", "")
+        confidence = normalized_payload.get("confidence", "")
+        secondary = normalized_payload.get("secondary_focuses", [])
+        subgroups = normalized_payload.get("subgroup_labels", [])
+        evidence = normalized_payload.get("evidence", [])
+        snippets = ask_payload.get("snippets", []) if isinstance(ask_payload, dict) else []
+        snippet_map: dict[str, str] = {}
+        if isinstance(snippets, list):
+            for item in snippets:
+                if not isinstance(item, dict):
+                    continue
+                sid = str(item.get("snippet_id", "") or "").strip()
+                text = str(item.get("text", "") or "").strip()
+                if sid:
+                    snippet_map[sid] = text
+
+        show_full_snippets = False
 
         while True:
             clear()
-            header = f"[bold]Classify Review[/bold]  [dim]{pos}/{len(queue_indices)}[/dim]"
+            header = (
+                f"[bold]Classify Review[/bold]  [dim]{pos}/{len(queue_indices)}[/dim]\n"
+                f"Question: [bold]{question.id}[/bold]\n"
+                f"Purpose: [{C_MUTED}]{question.description or '-'}[/{C_MUTED}]"
+            )
             console.print(make_panel(header, "Review Queue"))
-            console.print(make_panel(details, question.id))
+
+            org_rows = [
+                ("Name", f"[{C_PRIMARY}]{org_name}[/{C_PRIMARY}]"),
+                ("Org ID", f"[{C_MUTED}]{org_id or '-'}[/{C_MUTED}]"),
+                ("Auto result", f"[bold]{auto_result or '-'}[/bold]"),
+                (
+                    "Auto decided at",
+                    f"[{C_MUTED}]{auto_result_at or '-'}[/{C_MUTED}]",
+                ),
+                (
+                    "Review result",
+                    f"[{C_MUTED}]{review_result or '-'}[/{C_MUTED}]",
+                ),
+                (
+                    "Reviewed at",
+                    f"[{C_MUTED}]{review_result_at or '-'}[/{C_MUTED}]",
+                ),
+            ]
+            console.print(make_panel(make_kv_table(org_rows), "Organization"))
+
+            pred_rows = [
+                (
+                    "Primary focus",
+                    f"[bold]{primary_focus or '-'}[/bold] "
+                    f"({fmt_float_conf(primary_focus_conf)})",
+                ),
+                (
+                    "Service mode",
+                    f"[bold]{service_mode or '-'}[/bold] ({fmt_float_conf(confidence)})",
+                ),
+                ("Secondary", compact_list(secondary)),
+                ("Subgroups", compact_list(subgroups)),
+                (
+                    "Reason",
+                    f"[{C_MUTED}]{reason or '-'}[/{C_MUTED}]",
+                ),
+            ]
+            console.print(make_panel(make_kv_table(pred_rows), "LLM Classification"))
+
+            reason_panel = review_reason_text(auto_result, normalized_payload)
             console.print(
-                make_actions_table(
-                    [
-                        ("a", "accept in scope"),
-                        ("x", "exclude irrelevant"),
-                        ("u", "keep pending"),
-                        ("s", "skip"),
-                        ("q", "quit"),
-                    ]
+                make_panel(
+                    f"[{C_MUTED}]{reason_panel}[/{C_MUTED}]",
+                    "Why Manual Review",
+                )
+            )
+
+            evidence_lines: list[str] = []
+            if isinstance(evidence, list) and evidence:
+                for idx_e, item in enumerate(evidence, start=1):
+                    if not isinstance(item, dict):
+                        continue
+                    sid = str(item.get("snippet_id", "") or "").strip()
+                    quote = str(item.get("quote", "") or "").strip()
+                    if not sid:
+                        continue
+                    evidence_lines.append(f"{idx_e}. {sid}: \"{quote or '-'}\"")
+                    if show_full_snippets and sid in snippet_map:
+                        full_text = snippet_map[sid][:500]
+                        evidence_lines.append(f"   [{C_MUTED}]snippet: {full_text}[/{C_MUTED}]")
+            else:
+                evidence_lines.append(f"[{C_MUTED}]No evidence payload available.[/{C_MUTED}]")
+
+            evidence_title = "Evidence"
+            if show_full_snippets:
+                evidence_title += " (with snippet context)"
+            console.print(make_panel("\n".join(evidence_lines), evidence_title))
+
+            console.print(
+                make_panel(
+                    make_actions_table(
+                        [
+                            ("a", "accept in scope"),
+                            ("x", "mark excluded"),
+                            ("u", "keep pending"),
+                            (
+                                "v",
+                                "toggle snippet context",
+                            ),
+                            ("s", "skip"),
+                            ("q", "quit"),
+                        ]
+                    ),
+                    "Actions",
                 )
             )
 
@@ -906,6 +1043,9 @@ def review_classifications(
             if key == "s":
                 stats["skipped"] += 1
                 break
+            if key == "v":
+                show_full_snippets = not show_full_snippets
+                continue
             if key == "u":
                 note = ask_text("Optional note")
                 review_payload = {
