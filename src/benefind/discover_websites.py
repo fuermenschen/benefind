@@ -19,14 +19,15 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
-# TODO: check if async would make sense here
 
-from benefind.config import Settings
+from benefind.config import Settings, render_prompt_template
 from benefind.external_api import (
     ExternalApiAccessError,
     classify_http_access_error,
     classify_openai_access_error,
 )
+
+# TODO: check if async would make sense here
 
 logger = logging.getLogger(__name__)
 
@@ -484,13 +485,16 @@ def _llm_web_verify(
     if stop_event is not None and stop_event.is_set():
         return None, "llm_skipped: batch_stopped", "", ""
 
-    prompt = (
-        "Find the official website for this Swiss nonprofit organization. "
-        "Return JSON only with keys: url, confidence, reason.\n"
-        f"Organization: {org_name}\n"
-        f"Location: {org_location or '-'}\n"
-        f"Candidate URL from search ranking: {candidate_url or '-'}\n"
-        "Rules: provide the single best official website URL; if unclear, set url to empty string."
+    prompt_def = settings.prompts.get("discover.website_verify")
+    if prompt_def is None:
+        raise ValueError("Prompt 'discover.website_verify' is missing from prompt registry")
+    prompt = render_prompt_template(
+        prompt_def,
+        {
+            "org_name": org_name,
+            "org_location": org_location or "-",
+            "candidate_url": candidate_url or "-",
+        },
     )
 
     try:

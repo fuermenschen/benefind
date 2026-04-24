@@ -1,0 +1,20 @@
+[prompt]
+id = "discover.website_verify"
+description = "Find the official website URL for a Swiss nonprofit"
+template = """
+Find the official website for this Swiss nonprofit organization.
+Return JSON only with keys: url, confidence, reason.
+Organization: {org_name}
+Location: {org_location}
+Candidate URL from search ranking: {candidate_url}
+Rules: provide the single best official website URL; if unclear, set url to empty string.
+"""
+
+[prompt.placeholders]
+org_name = "Organization name"
+org_location = "Organization location (or '-')"
+candidate_url = "Top ranked URL candidate (or '-')"
+
+[prompt.response]
+format = "json_object"
+required_keys = ["url", "confidence", "reason"]

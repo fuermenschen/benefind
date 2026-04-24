@@ -4,7 +4,7 @@ All configuration lives in `config/`.
 
 - `settings.toml`: general settings (thresholds, delays, model choice)
 - `municipalities.toml`: list of municipalities in Bezirk Winterthur
-- `prompts.toml`: prompt templates (legacy/evolving; not part of active CLI post-scrape execution)
+- `prompts/`: prompt registry files (`*.toml`) with template, placeholder metadata, and response contract
 - `url_scoring.toml`: lexical URL ranking/exclusion rules for `prepare-scraping`
 
 For local machine overrides, create:

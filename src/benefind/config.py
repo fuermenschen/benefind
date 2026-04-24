@@ -9,6 +9,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from string import Formatter
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -95,11 +96,14 @@ class LlmConfig:
 
 
 @dataclass
-class PromptTemplate:
+class PromptDefinition:
     id: str
     description: str
-    question: str
-    answer_type: str = "text"
+    template: str
+    placeholders: dict[str, str] = field(default_factory=dict)
+    response_format: str = "text"
+    response_required_keys: list[str] = field(default_factory=list)
+    source_path: str = ""
 
 
 @dataclass
@@ -133,7 +137,7 @@ class Settings:
     search: SearchConfig = field(default_factory=SearchConfig)
     llm: LlmConfig = field(default_factory=LlmConfig)
     municipalities: MunicipalityConfig = field(default_factory=MunicipalityConfig)
-    prompts: list[PromptTemplate] = field(default_factory=list)
+    prompts: dict[str, PromptDefinition] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +169,7 @@ def load_settings(config_dir: Path | None = None) -> Settings:
     1. config/settings.toml
     2. config/settings.local.toml (if exists, gitignored)
     3. config/municipalities.toml
-    4. config/prompts.toml
+    4. config/prompts/*.toml (prompt registry)
     """
     config_dir = config_dir or CONFIG_DIR
 
@@ -181,8 +185,7 @@ def load_settings(config_dir: Path | None = None) -> Settings:
     # --- municipalities.toml ---
     muni_data = _load_toml(config_dir / "municipalities.toml")
 
-    # --- prompts.toml ---
-    prompts_data = _load_toml(config_dir / "prompts.toml")
+    prompt_registry = load_prompt_registry(config_dir)
 
     # Build Settings object
     general = settings_data.get("general", {})
@@ -196,8 +199,119 @@ def load_settings(config_dir: Path | None = None) -> Settings:
         municipalities=MunicipalityConfig(
             **muni_data.get("bezirk_winterthur", {}),
         ),
-        prompts=[PromptTemplate(**p) for p in prompts_data.get("prompts", [])],
+        prompts=prompt_registry,
     )
+
+
+def _template_placeholders(template: str) -> set[str]:
+    names: set[str] = set()
+    for _, field_name, _, _ in Formatter().parse(template):
+        if field_name:
+            names.add(field_name)
+    return names
+
+
+def _validate_prompt_definition(prompt: PromptDefinition) -> None:
+    prompt_id = str(prompt.id or "").strip()
+    if not prompt_id:
+        raise ValueError("Prompt id is required")
+
+    template = str(prompt.template or "")
+    if not template.strip():
+        raise ValueError(f"Prompt '{prompt_id}' has an empty template")
+
+    declared = set(prompt.placeholders.keys())
+    discovered = _template_placeholders(template)
+    missing = sorted(discovered - declared)
+    unused = sorted(declared - discovered)
+    if missing or unused:
+        detail_parts: list[str] = []
+        if missing:
+            detail_parts.append(f"missing declarations: {', '.join(missing)}")
+        if unused:
+            detail_parts.append(f"unused declarations: {', '.join(unused)}")
+        detail = "; ".join(detail_parts)
+        raise ValueError(f"Prompt '{prompt_id}' placeholder mismatch ({detail})")
+
+    if prompt.response_format == "json_object":
+        if not prompt.response_required_keys:
+            raise ValueError(
+                f"Prompt '{prompt_id}' requires response.required_keys for json_object format"
+            )
+
+
+def load_prompt_registry(config_dir: Path | None = None) -> dict[str, PromptDefinition]:
+    config_dir = config_dir or CONFIG_DIR
+    prompt_dir = config_dir / "prompts"
+    if not prompt_dir.exists() or not prompt_dir.is_dir():
+        raise ValueError(f"Prompt directory not found: {prompt_dir}")
+
+    prompt_files = sorted(path for path in prompt_dir.glob("*.toml") if path.is_file())
+    if not prompt_files:
+        raise ValueError(f"No prompt files found in {prompt_dir}")
+
+    registry: dict[str, PromptDefinition] = {}
+    for prompt_path in prompt_files:
+        data = _load_toml(prompt_path)
+        prompt_data = data.get("prompt", {})
+        if not isinstance(prompt_data, dict) or not prompt_data:
+            raise ValueError(f"Prompt file must define [prompt]: {prompt_path}")
+
+        placeholders_raw = prompt_data.get("placeholders", {})
+        if not isinstance(placeholders_raw, dict):
+            raise ValueError(f"Prompt placeholders must be a table in {prompt_path}")
+        placeholders = {
+            str(key).strip(): str(value).strip() for key, value in placeholders_raw.items()
+        }
+
+        response_raw = prompt_data.get("response", {})
+        if not isinstance(response_raw, dict):
+            raise ValueError(f"Prompt response must be a table in {prompt_path}")
+        response_format = str(response_raw.get("format", "text") or "text").strip()
+        required_keys_raw = response_raw.get("required_keys", [])
+        if required_keys_raw is None:
+            required_keys_raw = []
+        if not isinstance(required_keys_raw, list):
+            raise ValueError(f"Prompt response.required_keys must be an array in {prompt_path}")
+        required_keys = [str(value).strip() for value in required_keys_raw if str(value).strip()]
+
+        prompt = PromptDefinition(
+            id=str(prompt_data.get("id", "") or "").strip(),
+            description=str(prompt_data.get("description", "") or "").strip(),
+            template=str(prompt_data.get("template", "") or ""),
+            placeholders=placeholders,
+            response_format=response_format,
+            response_required_keys=required_keys,
+            source_path=str(prompt_path),
+        )
+        _validate_prompt_definition(prompt)
+
+        if prompt.id in registry:
+            existing_path = registry[prompt.id].source_path
+            raise ValueError(
+                f"Duplicate prompt id '{prompt.id}' in {prompt_path} and {existing_path}"
+            )
+        registry[prompt.id] = prompt
+
+    return registry
+
+
+def render_prompt_template(prompt: PromptDefinition, values: dict[str, object]) -> str:
+    declared = set(prompt.placeholders.keys())
+    provided = set(values.keys())
+    missing = sorted(declared - provided)
+    unexpected = sorted(provided - declared)
+    if missing or unexpected:
+        detail_parts: list[str] = []
+        if missing:
+            detail_parts.append(f"missing values: {', '.join(missing)}")
+        if unexpected:
+            detail_parts.append(f"unexpected values: {', '.join(unexpected)}")
+        detail = "; ".join(detail_parts)
+        raise ValueError(f"Prompt '{prompt.id}' render failed ({detail})")
+
+    format_values = {key: str(value) for key, value in values.items()}
+    return prompt.template.format(**format_values)
 
 
 def load_url_scoring_config(config_dir: Path | None = None) -> UrlScoringConfig:

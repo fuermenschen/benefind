@@ -6,7 +6,7 @@ benefind/
 │   ├── settings.toml
 │   ├── url_scoring.toml
 │   ├── municipalities.toml
-│   └── prompts.toml
+│   └── prompts/
 ├── data/                    # All intermediate and output data (gitignored)
 │   ├── raw/                 # Downloaded PDF
 │   ├── parsed/              # Extracted CSV
