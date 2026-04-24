@@ -3685,6 +3685,640 @@ def delete_cmd(
 
 
 @app.command()
+def classify(
+    input_file: Path | None = typer.Option(
+        None,
+        "--input",
+        "-i",
+        help="Path to classify input CSV (default: filtered/organizations_with_websites.csv)",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Path to output CSV (default: in-place)",
+    ),
+    question: str | None = typer.Option(
+        None,
+        "--question",
+        help="Question id (for example: q01_target_focus).",
+    ),
+    phase: str = typer.Option(
+        "auto",
+        "--phase",
+        help="Phase to run: auto, ask, or review.",
+    ),
+    refresh: bool = typer.Option(
+        False,
+        "--refresh",
+        help="Reset selected question rows before ask phase (active + eligible rows only).",
+    ),
+    wizard: bool = typer.Option(
+        True,
+        "--wizard/--no-wizard",
+        help="Enable interactive review wizard prompts.",
+    ),
+    subset: bool = typer.Option(
+        False,
+        "--subset",
+        help="Process only a random subset of rows in the selected phase.",
+    ),
+    subset_size: int = typer.Option(
+        10,
+        "--size",
+        "-n",
+        help="Number of rows when --subset is enabled.",
+    ),
+    subset_seed: int | None = typer.Option(
+        None,
+        "--subset-seed",
+        help="Optional random seed used for --subset sampling.",
+    ),
+    stop_after: int | None = typer.Option(
+        None,
+        "--stop-after",
+        help="Process at most N rows then exit cleanly.",
+    ),
+    workers: int = typer.Option(
+        8,
+        "--workers",
+        help="Concurrent workers for classify ask phase.",
+    ),
+    debug_sample: bool = typer.Option(
+        False,
+        "--debug-sample",
+        help="Run one debug sample and print prompt/response without writing results.",
+    ),
+    debug_seed: int | None = typer.Option(
+        None,
+        "--debug-seed",
+        help="Optional random seed for debug sample selection.",
+    ),
+    debug_org_id: str | None = typer.Option(
+        None,
+        "--debug-org-id",
+        help="Debug a specific _org_id.",
+    ),
+    debug_org_name: str | None = typer.Option(
+        None,
+        "--debug-org-name",
+        help="Debug by exact organization name (case-insensitive).",
+    ),
+) -> None:
+    """Run LLM-backed multi-step classification (ask/review loop)."""
+    import random
+
+    from benefind.classify import (
+        apply_auto_summary,
+        changed_question_ids,
+        classify_lock_path,
+        classify_once,
+        classify_org_dir,
+        cleanup_legacy_classify_columns,
+        collect_evidence_snippets,
+        count_phase,
+        ensure_compact_classify_columns,
+        ensure_question_columns,
+        format_debug_result,
+        is_append_only_addition,
+        load_classify_questions,
+        load_eligible_org_ids,
+        load_registry_lock,
+        mark_ineligible_for_waiting,
+        progressed_question_ids,
+        question_columns,
+        read_org_artifact,
+        registry_changes,
+        reset_question_rows,
+        restore_eligible_waiting_rows,
+        review_classifications,
+        save_registry_lock,
+        update_classify_meta,
+        write_org_artifact,
+    )
+    from benefind.external_api import ExternalApiAccessError
+
+    settings = load_settings()
+    _setup_logging(settings.log_level)
+    interactive = wizard and sys.stdin.isatty() and sys.stdout.isatty()
+
+    phase_norm = phase.strip().lower()
+    if phase_norm not in {"auto", "ask", "review"}:
+        raise typer.BadParameter("--phase must be one of: auto, ask, review")
+
+    if subset and subset_size <= 0:
+        raise typer.BadParameter("--size/-n must be greater than 0 when --subset is used.")
+    if stop_after is not None and stop_after <= 0:
+        raise typer.BadParameter("--stop-after must be greater than 0.")
+    if workers <= 0:
+        raise typer.BadParameter("--workers must be greater than 0.")
+    if debug_org_id and debug_org_name:
+        raise typer.BadParameter("Use either --debug-org-id or --debug-org-name, not both.")
+    if subset and (debug_sample or debug_org_id or debug_org_name):
+        raise typer.BadParameter("Use either subset mode or debug mode, not both.")
+
+    input_path = input_file or (
+        PROJECT_ROOT / "data" / "filtered" / "organizations_with_websites.csv"
+    )
+    output_path = output_file or input_path
+    if not input_path.exists():
+        print_error(f"Input file not found: {input_path}")
+        raise typer.Exit(code=1)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    base_df = pd.read_csv(input_path, encoding="utf-8-sig")
+    if base_df.empty:
+        console.print("[yellow]Input CSV is empty. Nothing to classify.[/yellow]")
+        return
+    if "_org_id" not in base_df.columns:
+        raise typer.BadParameter("Input CSV has no _org_id column.")
+
+    for col in ["_excluded_reason", "_excluded_reason_note", "_excluded_at"]:
+        if col not in base_df.columns:
+            base_df[col] = ""
+        else:
+            base_df[col] = base_df[col].astype(object).where(base_df[col].notna(), "")
+
+    name_column = _detect_first_column(list(base_df.columns), NAME_COLUMN_CANDIDATES, default="")
+    if not name_column:
+        raise typer.BadParameter("Could not detect organization name column in input CSV.")
+    location_column = _detect_first_column(
+        list(base_df.columns),
+        ["Sitzort", "Sitz", "Ort"],
+        default="",
+    )
+
+    questions = load_classify_questions()
+    if not questions:
+        console.print("[yellow]No enabled classify questions found.[/yellow]")
+        return
+
+    question_map = {item.id: item for item in questions}
+    if question:
+        requested = question.strip()
+        target_question = question_map.get(requested)
+        if target_question is None:
+            available = ", ".join(sorted(question_map.keys()))
+            raise typer.BadParameter(f"Unknown question id '{requested}'. Available: {available}")
+        active_questions = [target_question]
+    else:
+        active_questions = questions
+
+    for item in active_questions:
+        ensure_question_columns(base_df, item.id)
+    ensure_compact_classify_columns(base_df)
+    removed_cols = cleanup_legacy_classify_columns(base_df, questions)
+    if removed_cols:
+        console.print(
+            "[yellow]Removed legacy classify columns: "
+            f"{', '.join(sorted(removed_cols))}[/yellow]"
+        )
+
+    lock_path = classify_lock_path()
+    lock_payload = load_registry_lock(lock_path)
+    if not lock_payload:
+        save_registry_lock(questions, lock_path)
+    else:
+        changes = registry_changes(questions, lock_payload)
+        has_changes = any(bool(values) for values in changes.values())
+        if has_changes:
+            if is_append_only_addition(questions, lock_payload):
+                added = ", ".join(changes["added"])
+                print_warning(
+                    "Detected new classify question(s): "
+                    f"{added}. Appending to lock registry."
+                )
+                save_registry_lock(questions, lock_path)
+            else:
+                progressed = progressed_question_ids(base_df, questions)
+                removed_progressed: set[str] = set()
+                for removed_id in changes.get("removed", []):
+                    removed_cols = question_columns(removed_id)
+                    auto_col = removed_cols["auto_result"]
+                    review_col = removed_cols["review_result"]
+                    auto_progress = (
+                        auto_col in base_df.columns
+                        and bool((base_df[auto_col].astype(str).str.strip() != "").any())
+                    )
+                    review_progress = (
+                        review_col in base_df.columns
+                        and bool((base_df[review_col].astype(str).str.strip() != "").any())
+                    )
+                    if auto_progress or review_progress:
+                        removed_progressed.add(removed_id)
+                progressed = progressed | removed_progressed
+                changed = changed_question_ids(changes)
+                impacted = sorted(progressed & changed)
+                if progressed:
+                    detail_parts: list[str] = []
+                    for key in ["fingerprint_changed", "reordered", "removed", "added"]:
+                        values = changes.get(key, [])
+                        if values:
+                            detail_parts.append(f"{key}={','.join(values)}")
+                    details = "; ".join(detail_parts) or "registry changed"
+                    impacted_text = ", ".join(impacted) if impacted else "n/a"
+                    raise typer.BadParameter(
+                        "Classify question registry changed after prior progress. "
+                        f"{details}. impacted_progress={impacted_text}. "
+                        "Start a fresh classify cycle before continuing."
+                    )
+
+                print_warning(
+                    "Classify registry changed but no prior classify progress was found. "
+                    "Updating lock file."
+                )
+                save_registry_lock(questions, lock_path)
+
+    eligible_org_ids = load_eligible_org_ids()
+    if not eligible_org_ids:
+        raise typer.BadParameter(
+            "No eligible organizations with usable cleaned text found. "
+            "Run benefind scrape-clean first."
+        )
+
+    def save_checkpoint() -> None:
+        temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+        base_df.to_csv(temp_path, index=False, encoding="utf-8-sig")
+        temp_path.replace(output_path)
+
+    if refresh:
+        reset_counts = []
+        for item in active_questions:
+            reset_count = reset_question_rows(base_df, item, eligible_org_ids)
+            reset_counts.append((item.id, reset_count))
+        save_checkpoint()
+        details = ", ".join(f"{qid}:{count}" for qid, count in reset_counts)
+        console.print(f"[yellow]Refresh reset classify rows ({details}).[/yellow]")
+
+    for item in active_questions:
+        restored_count = restore_eligible_waiting_rows(base_df, item, eligible_org_ids)
+        if restored_count > 0:
+            console.print(
+                "[yellow]"
+                f"Restored {restored_count} rows from waiting_for_clean_text "
+                f"back to pending ask ({item.id})."
+                "[/yellow]"
+            )
+            save_checkpoint()
+
+        newly_marked = mark_ineligible_for_waiting(base_df, item, eligible_org_ids)
+        if newly_marked > 0:
+            console.print(
+                "[yellow]"
+                f"Marked {newly_marked} rows as waiting_for_clean_text "
+                f"({item.id}: no usable cleaned text)."
+                "[/yellow]"
+            )
+            save_checkpoint()
+
+    selected_question = None
+    selected_phase = phase_norm
+    selected_counts = (0, 0)
+
+    if phase_norm == "auto":
+        for item in active_questions:
+            ask_pending, review_pending = count_phase(base_df, item, eligible_org_ids)
+            if ask_pending > 0:
+                selected_question = item
+                selected_phase = "ask"
+                selected_counts = (ask_pending, review_pending)
+                break
+            if review_pending > 0:
+                selected_question = item
+                selected_phase = "review"
+                selected_counts = (ask_pending, review_pending)
+                break
+    else:
+        for item in active_questions:
+            ask_pending, review_pending = count_phase(base_df, item, eligible_org_ids)
+            if (phase_norm == "ask" and ask_pending > 0) or (
+                phase_norm == "review" and review_pending > 0
+            ):
+                selected_question = item
+                selected_phase = phase_norm
+                selected_counts = (ask_pending, review_pending)
+                break
+
+    if selected_question is None:
+        console.print(
+            "[green]No pending classify work. "
+            "All selected questions are complete.[/green]"
+        )
+        return
+
+    cols = question_columns(selected_question.id)
+    org_ids_series = base_df["_org_id"].astype(str).str.strip()
+    active_mask = base_df["_excluded_reason"].astype(str).str.strip() == ""
+
+    if selected_phase == "ask":
+        queue_mask = (
+            active_mask
+            & org_ids_series.isin(eligible_org_ids)
+            & (base_df[cols["auto_result"]].astype(str).str.strip() == "")
+        )
+    else:
+        queue_mask = active_mask & (
+            (base_df[cols["auto_result"]].astype(str).str.strip().str.lower() == "needs_review")
+            & (base_df[cols["review_result"]].astype(str).str.strip() == "")
+        )
+
+    queue_df = base_df[queue_mask]
+    if queue_df.empty:
+        console.print("[yellow]Selected phase has no pending rows.[/yellow]")
+        return
+
+    if subset:
+        seed = subset_seed if subset_seed is not None else random.SystemRandom().randrange(1, 10**9)
+        n = min(int(subset_size), len(queue_df))
+        queue_df = queue_df.sample(n=n, random_state=seed)
+        print_summary(
+            "Classify Subset",
+            [
+                ("Question", selected_question.id),
+                ("Phase", selected_phase),
+                ("Selected", n),
+                ("Seed", seed),
+            ],
+        )
+
+    if stop_after is not None:
+        queue_df = queue_df.head(stop_after)
+
+    queue_indices = list(queue_df.index)
+    if not queue_indices:
+        console.print("[yellow]No rows selected after subset/stop filters.[/yellow]")
+        return
+
+    if debug_sample or debug_org_id or debug_org_name:
+        sample_df = queue_df
+        used_seed: int | None = None
+
+        if debug_org_id:
+            sample_df = base_df[base_df["_org_id"].astype(str).str.strip() == debug_org_id.strip()]
+            if sample_df.empty:
+                raise typer.BadParameter(
+                    f"No organization found for --debug-org-id={debug_org_id!r}"
+                )
+        elif debug_org_name:
+            target = debug_org_name.strip().lower()
+            sample_df = base_df[base_df[name_column].astype(str).str.strip().str.lower() == target]
+            if sample_df.empty:
+                raise typer.BadParameter(
+                    f"No organization found for --debug-org-name={debug_org_name!r}"
+                )
+        else:
+            used_seed = (
+                debug_seed if debug_seed is not None else random.SystemRandom().randrange(1, 10**9)
+            )
+            sample_df = queue_df.sample(n=1, random_state=used_seed)
+
+        row = sample_df.iloc[0]
+        org_id = str(row.get("_org_id", "") or "").strip()
+        org_name = str(row.get(name_column, "") or "").strip()
+        org_location = str(row.get(location_column, "") or "").strip() if location_column else ""
+        snippets = collect_evidence_snippets(org_id, selected_question)
+
+        error_message = ""
+        result = None
+        try:
+            if selected_phase == "review":
+                ask_path = classify_org_dir(org_id, selected_question.id) / "ask.json"
+                payload = read_org_artifact(ask_path)
+                console.print("[bold]Classify debug sample (review phase)[/bold]")
+                if used_seed is not None:
+                    console.print(f"Seed: {used_seed}")
+                console.print(f"Org ID: {org_id or '-'}")
+                console.print(f"Org: {org_name or '-'}")
+                console.print(f"Question: {selected_question.id}")
+                console.print(f"Payload: {payload}")
+                return
+
+            result = classify_once(org_name, org_location, snippets, selected_question, settings)
+        except Exception as e:
+            error_message = str(e)
+
+        if used_seed is not None:
+            console.print(f"Seed: {used_seed}")
+        format_debug_result(org_id, org_name, org_location, snippets, result, error_message)
+        return
+
+    print_summary(
+        "Classify Plan",
+        [
+            ("Question", selected_question.id),
+            ("Phase", selected_phase),
+            ("Workers", workers if selected_phase == "ask" else "-"),
+            ("Ask pending", selected_counts[0]),
+            ("Review pending", selected_counts[1]),
+            ("Selected rows", len(queue_indices)),
+            ("Input", str(input_path)),
+            ("Output", str(output_path)),
+        ],
+    )
+
+    if selected_phase == "ask":
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        stats = {"accepted": 0, "excluded": 0, "review": 0, "errors": 0}
+
+        def run_single(row_index: int) -> dict[str, object]:
+            row = base_df.loc[row_index]
+            org_id = str(row.get("_org_id", "") or "").strip()
+            org_name = str(row.get(name_column, "") or "").strip()
+            org_location = (
+                str(row.get(location_column, "") or "").strip() if location_column else ""
+            )
+            snippets = collect_evidence_snippets(org_id, selected_question)
+            if not snippets:
+                return {
+                    "row_index": row_index,
+                    "org_id": org_id,
+                    "org_name": org_name,
+                    "snippets": snippets,
+                    "kind": "no_snippets",
+                }
+            try:
+                result = classify_once(
+                    org_name,
+                    org_location,
+                    snippets,
+                    selected_question,
+                    settings,
+                )
+                return {
+                    "row_index": row_index,
+                    "org_id": org_id,
+                    "org_name": org_name,
+                    "snippets": snippets,
+                    "kind": "ok",
+                    "result": result,
+                }
+            except ExternalApiAccessError as e:
+                return {
+                    "row_index": row_index,
+                    "org_id": org_id,
+                    "org_name": org_name,
+                    "snippets": snippets,
+                    "kind": "access_error",
+                    "error_obj": e,
+                }
+            except Exception as e:
+                return {
+                    "row_index": row_index,
+                    "org_id": org_id,
+                    "org_name": org_name,
+                    "snippets": snippets,
+                    "kind": "error",
+                    "error": str(e),
+                }
+
+        completed = 0
+        access_error: ExternalApiAccessError | None = None
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {executor.submit(run_single, idx): idx for idx in queue_indices}
+            for future in as_completed(future_map):
+                payload = future.result()
+                completed += 1
+                row_index = int(payload["row_index"])
+                org_id = str(payload["org_id"])
+                org_name = str(payload["org_name"])
+                snippets = payload.get("snippets", [])
+                kind = str(payload.get("kind", "error"))
+
+                if kind == "access_error":
+                    access_error = payload.get("error_obj")  # type: ignore[assignment]
+                    for pending_future in future_map:
+                        if not pending_future.done():
+                            pending_future.cancel()
+                    break
+
+                if kind == "no_snippets":
+                    apply_auto_summary(base_df, row_index, selected_question, "needs_review")
+                    write_org_artifact(
+                        classify_org_dir(org_id, selected_question.id) / "ask.json",
+                        {
+                            "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+                            "question_id": selected_question.id,
+                            "org_id": org_id,
+                            "org_name": org_name,
+                            "route": "needs_review",
+                            "error": "No usable evidence snippets found",
+                            "snippets": snippets,
+                        },
+                    )
+                    stats["errors"] += 1
+                elif kind == "ok":
+                    result = payload["result"]
+                    apply_auto_summary(base_df, row_index, selected_question, result.route)
+                    write_org_artifact(
+                        classify_org_dir(org_id, selected_question.id) / "ask.json",
+                        {
+                            "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+                            "question_id": selected_question.id,
+                            "org_id": org_id,
+                            "org_name": org_name,
+                            "route": result.route,
+                            "normalized": result.payload,
+                            "snippets": snippets,
+                            "prompt": result.prompt,
+                            "raw_response": result.raw_response,
+                        },
+                    )
+                    if result.route == "auto_accepted":
+                        stats["accepted"] += 1
+                    elif result.route == "auto_excluded":
+                        stats["excluded"] += 1
+                    else:
+                        stats["review"] += 1
+                else:
+                    apply_auto_summary(base_df, row_index, selected_question, "needs_review")
+                    write_org_artifact(
+                        classify_org_dir(org_id, selected_question.id) / "ask.json",
+                        {
+                            "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+                            "question_id": selected_question.id,
+                            "org_id": org_id,
+                            "org_name": org_name,
+                            "route": "needs_review",
+                            "error": str(payload.get("error", "unknown classify error")),
+                            "snippets": snippets,
+                        },
+                    )
+                    stats["errors"] += 1
+
+                update_classify_meta(base_df)
+                save_checkpoint()
+
+                if interactive:
+                    typer.echo(
+                        f"\r[{completed}/{len(queue_indices)}] accepted={stats['accepted']} "
+                        f"excluded={stats['excluded']} review={stats['review']} "
+                        f"errors={stats['errors']}",
+                        nl=False,
+                    )
+                elif completed == len(queue_indices) or completed % 25 == 0:
+                    console.print(
+                        f"[{completed}/{len(queue_indices)}] accepted={stats['accepted']} "
+                        f"excluded={stats['excluded']} review={stats['review']} "
+                        f"errors={stats['errors']}"
+                    )
+
+        if access_error is not None:
+            if interactive:
+                typer.echo("")
+            save_checkpoint()
+            print_warning("Classify ask stopped early due to external API access issue.")
+            print_error(f"{access_error.provider}: {access_error.reason}")
+            raise typer.Exit(code=1)
+
+        if interactive:
+            typer.echo("")
+
+        print_summary(
+            "Classify Ask Results",
+            [
+                ("Question", selected_question.id),
+                ("Processed", len(queue_indices)),
+                ("Auto accepted", stats["accepted"]),
+                ("Auto excluded", stats["excluded"]),
+                ("Review needed", stats["review"]),
+                ("Errors", stats["errors"]),
+                ("Saved", str(output_path)),
+            ],
+        )
+        return
+
+    review_stats = review_classifications(
+        base_df,
+        selected_question,
+        queue_indices,
+        interactive=interactive,
+        save_callback=save_checkpoint,
+    )
+
+    if not interactive:
+        print_warning(
+            "Review phase requires interactive terminal. "
+            f"Pending review rows: {review_stats['remaining']}"
+        )
+        return
+
+    update_classify_meta(base_df)
+    save_checkpoint()
+    print_summary(
+        "Classify Review Results",
+        [
+            ("Question", selected_question.id),
+            ("Accepted", review_stats["accepted"]),
+            ("Excluded", review_stats["excluded"]),
+            ("Skipped", review_stats["skipped"]),
+            ("Remaining", review_stats["remaining"]),
+            ("Saved", str(output_path)),
+        ],
+    )
+
+
+@app.command()
 def review(
     what: str = typer.Argument(
         ...,

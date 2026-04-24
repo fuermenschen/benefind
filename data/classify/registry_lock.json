@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "questions": [
+    {
+      "id": "q01_target_focus",
+      "order": 10,
+      "prompt_id": "classify.q01_target_focus",
+      "source_path": "/Users/simonmoser/Code/benefind/config/prompts/classify.q01_target_focus.toml",
+      "fingerprint": "7a23b82b4870c63c69946be5617ca0850e1c8ad3793402803ac57c18df90aa1a"
+    }
+  ],
+  "created_at": "2026-04-24T20:10:55+00:00",
+  "updated_at": "2026-04-24T20:59:05+00:00"
+}

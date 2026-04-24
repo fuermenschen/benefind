@@ -1,0 +1,238 @@
+[prompt]
+id = "classify.q01_target_focus"
+description = "Conservative evidence-only classification of an organization's target focus and service directness"
+template = """
+Classify one organization using ONLY the provided evidence snippets.
+Do not infer facts that are not stated in the snippets.
+If the evidence is weak, vague, or conflicting, be conservative.
+Prefer unknown or lower confidence over guessing.
+
+Return exactly one valid JSON object.
+Return no markdown, no prose, and no extra keys.
+
+Required keys:
+- primary_focus
+- primary_focus_confidence
+- secondary_focuses
+- subgroup_labels
+- service_mode
+- confidence
+- evidence
+- reason
+
+Output shape:
+{{
+	"primary_focus": "...",
+	"primary_focus_confidence": 0.0,
+	"secondary_focuses": [],
+	"subgroup_labels": [],
+	"service_mode": "...",
+	"confidence": 0.0,
+	"evidence": [],
+	"reason": "..."
+}}
+
+Organization:
+- name: {org_name}
+- location: {org_location}
+
+Allowed primary_focus values (choose exactly one string):
+- humans
+- environment
+- animals
+- education
+- arts_culture
+- religion_faith
+- advocacy_policy
+- infrastructure_community
+- funding_grantmaking
+- other
+- mixed
+- unknown
+
+secondary_focuses:
+- Array of 0 to 3 unique strings.
+- Allowed values are the same taxonomy as primary_focus, but do not use other, unknown or mixed.
+- Do not repeat primary_focus.
+- Use only for clearly supported secondary targets or purposes.
+
+subgroup_labels:
+- Array of 0 to 5 unique short snake_case labels.
+- Use labels only when directly supported by the snippets.
+- If unsure, use an empty array.
+- Style examples only: children, forests, wildlife, musicians, parish_members, museums
+
+Allowed service_mode values (choose exactly one string):
+- direct_service
+- indirect_only
+- mixed
+- unknown
+
+service_mode definitions:
+- direct_service: the organization directly serves, supports, houses, advises, accompanies, treats, feeds, trains, or otherwise works with its target group.
+- indirect_only: the organization mainly works through research, advocacy, publications, fundraising, preservation, events, infrastructure, grants, or support of other organizations.
+- mixed: both direct_service and indirect_only are clearly supported.
+- unknown: the snippets do not support a clear choice.
+
+confidence:
+- Number from 0.0 to 1.0.
+- Use lower confidence for vague, promotional, conflicting, or insufficient evidence.
+- Confidence calibration anchors:
+  - 0.8 to 1.0: strong and specific support with at least 2 clear evidence quotes.
+  - 0.6 to 0.79: plausible classification with at least 1 clear quote, but some ambiguity.
+  - below 0.6: weak, sparse, indirect, or conflicting support.
+
+primary_focus_confidence:
+- Number from 0.0 to 1.0.
+- Confidence only for primary_focus label correctness.
+- This can be high even if service_mode is unclear.
+
+evidence:
+- Array with 1 to 4 items when confidence is 0.6 or higher.
+- Empty array is allowed only when confidence is below 0.6.
+- Each item must be an object with exactly these keys: snippet_id, quote.
+- quote must be a short exact quote copied from a provided snippet.
+- Every snippet_id must match a provided snippet_id.
+
+reason:
+- One short sentence that explains the classification from the snippets.
+
+Decision rules:
+- Do not prefer any category. Use only what the snippets support.
+- Humans means humans are the actual target group or beneficiaries, not just people being mentioned.
+- Events, publications, fundraising, research, advocacy, grants, or preservation alone do not mean direct_service.
+- If one focus category is clearly dominant, use that category as primary_focus (not mixed).
+- Use primary_focus as mixed only when multiple categories are clearly supported and no single category is dominant.
+- Use primary_focus as other only when none of the listed categories fit and the snippets still support a specific focus.
+- If the evidence is insufficient, use primary_focus as unknown and service_mode as unknown.
+- If quotes are not clearly supported, leave them out and lower confidence.
+- Every quote must be verbatim from the snippets.
+- Return only valid JSON.
+
+Evidence snippets:
+{evidence_snippets}
+"""
+
+[prompt.placeholders]
+org_name = "Organization name"
+org_location = "Organization location (or '-')"
+evidence_snippets = "Prepared snippet list with snippet_id and text"
+
+[prompt.response]
+format = "json_object"
+required_keys = ["primary_focus", "primary_focus_confidence", "secondary_focuses", "subgroup_labels", "service_mode", "confidence", "evidence", "reason"]
+
+[classify]
+id = "q01_target_focus"
+enabled = true
+description = "Target focus + directness classification"
+order = 10
+
+[classify.source]
+kind = "pages_cleaned"
+max_snippets = 18
+max_snippet_chars = 800
+min_snippet_chars = 120
+
+[classify.policy]
+
+[[classify.policy.rules]]
+action = "auto_exclude"
+priority = 10
+mode = "all"
+conditions = [
+  { field = "primary_focus", op = "in", value = [
+    "environment",
+    "animals",
+    "arts_culture",
+    "religion_faith",
+    "advocacy_policy",
+    "infrastructure_community",
+    "funding_grantmaking",
+  ] },
+  { field = "primary_focus_confidence", op = "gte", value = 0.75 },
+  { field = "evidence", op = "len_gte", value = 2 },
+]
+
+[[classify.policy.rules]]
+action = "auto_accept"
+priority = 20
+mode = "all"
+conditions = [
+  { field = "primary_focus", op = "eq", value = "humans" },
+  { field = "service_mode", op = "eq", value = "direct_service" },
+  { field = "primary_focus_confidence", op = "gte", value = 0.75 },
+  { field = "confidence", op = "gte", value = 0.78 },
+  { field = "evidence", op = "len_gte", value = 2 },
+]
+
+[[classify.policy.rules]]
+action = "review_needed"
+priority = 25
+mode = "all"
+conditions = [
+  { field = "primary_focus", op = "eq", value = "education" },
+]
+
+[[classify.policy.rules]]
+action = "review_needed"
+priority = 26
+mode = "all"
+conditions = [
+  { field = "primary_focus", op = "not_in", value = ["humans", "unknown", "mixed", "other", "education"] },
+  { field = "secondary_focuses", op = "contains", value = "humans" },
+]
+
+[[classify.policy.rules]]
+action = "review_needed"
+priority = 27
+mode = "all"
+conditions = [
+  { field = "primary_focus", op = "not_in", value = ["humans", "unknown", "mixed", "other", "education"] },
+  { field = "subgroup_labels", op = "intersects", value = [
+    "children",
+    "young_adults",
+    "single_parents",
+    "older_adults",
+    "people_with_disabilities",
+    "refugees",
+    "migrants",
+    "women",
+    "families",
+  ] },
+]
+
+[[classify.policy.rules]]
+action = "review_needed"
+priority = 28
+mode = "all"
+conditions = [
+  { field = "primary_focus_confidence", op = "gte", value = 0.8 },
+  { field = "confidence", op = "lte", value = 0.6 },
+]
+
+[[classify.policy.rules]]
+action = "review_needed"
+priority = 29
+mode = "all"
+conditions = [
+  { field = "primary_focus", op = "in", value = ["advocacy_policy", "religion_faith"] },
+  { field = "primary_focus_confidence", op = "gte", value = 0.75 },
+]
+
+[[classify.policy.rules]]
+action = "review_needed"
+priority = 30
+mode = "any"
+conditions = [
+  { field = "primary_focus", op = "in", value = ["unknown", "mixed", "other"] },
+  { field = "service_mode", op = "in", value = ["unknown", "mixed", "indirect_only"] },
+]
+
+[[classify.policy.rules]]
+action = "review_needed"
+priority = 40
+mode = "all"
+conditions = [
+  { field = "confidence", op = "gte", value = 0.0 },
+]
