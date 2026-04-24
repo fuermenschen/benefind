@@ -925,6 +925,558 @@ def discover(
             review_websites()
 
 
+@app.command(name="add-zefix-information")
+def add_zefix_information(
+    input_file: Path | None = typer.Option(
+        None,
+        "--input",
+        "-i",
+        help="Path to input CSV (default: filtered/organizations_with_websites.csv)",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Path to output CSV with ZEFIX enrichment (default: in-place)",
+    ),
+    refresh: bool = typer.Option(
+        False,
+        "--refresh",
+        help="Recompute ZEFIX enrichment for all non-excluded organizations.",
+    ),
+    wizard: bool = typer.Option(
+        True,
+        "--wizard/--no-wizard",
+        help="Enable interactive safety prompts.",
+    ),
+    debug_sample: bool = typer.Option(
+        False,
+        "--debug-sample",
+        help="Run one random organization ZEFIX lookup and print decision details.",
+    ),
+    debug_seed: int | None = typer.Option(
+        None,
+        "--debug-seed",
+        help="Optional random seed for reproducible debug sample selection.",
+    ),
+    debug_org_id: str | None = typer.Option(
+        None,
+        "--debug-org-id",
+        help="Debug ZEFIX lookup for a specific _org_id.",
+    ),
+    debug_org_name: str | None = typer.Option(
+        None,
+        "--debug-org-name",
+        help="Debug ZEFIX lookup for a specific organization name (case-insensitive exact).",
+    ),
+    subset: bool = typer.Option(
+        False,
+        "--subset",
+        help="Enrich only a random subset of pending organizations.",
+    ),
+    subset_size: int = typer.Option(
+        10,
+        "--size",
+        "-n",
+        help="Number of organizations to include when --subset is enabled.",
+    ),
+    subset_seed: int | None = typer.Option(
+        None,
+        "--subset-seed",
+        help="Optional random seed used for --subset sampling (default: random each run).",
+    ),
+    stop_after: int | None = typer.Option(
+        None,
+        "--stop-after",
+        help="Process at most N pending organizations, then exit cleanly.",
+    ),
+    canton: str = typer.Option(
+        "ZH",
+        "--canton",
+        help="Canton filter passed to ZEFIX search (default: ZH).",
+    ),
+) -> None:
+    """Enrich organizations with ZEFIX legal form, UID, purpose, and status."""
+    import pandas as pd
+
+    from benefind.config import DATA_DIR
+    from benefind.external_api import ExternalApiAccessError
+    from benefind.zefix import enrich_with_zefix, enrich_with_zefix_batch
+
+    settings = load_settings()
+    _setup_logging(settings.log_level)
+    interactive = wizard and sys.stdin.isatty() and sys.stdout.isatty()
+
+    if interactive:
+        console.print(
+            make_panel(
+                "This operation queries ZEFIX (Swiss commercial register) "
+                "and writes enrichment columns.",
+                "Info",
+            )
+        )
+        if not confirm("Proceed with ZEFIX enrichment?", default=True):
+            console.print("[yellow]ZEFIX enrichment cancelled.[/yellow]")
+            return
+
+    input_path = input_file or (DATA_DIR / "filtered" / "organizations_with_websites.csv")
+    output_path = output_file or input_path
+    if not input_path.exists():
+        print_error(f"Input file not found: {input_path}")
+        raise typer.Exit(code=1)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    base_df = pd.read_csv(input_path, encoding="utf-8-sig")
+    if base_df.empty:
+        console.print("[yellow]Input CSV is empty. Nothing to enrich.[/yellow]")
+        return
+
+    if "_org_id" not in base_df.columns:
+        raise typer.BadParameter("Input CSV has no _org_id column.")
+
+    name_column = _detect_first_column(list(base_df.columns), NAME_COLUMN_CANDIDATES, default="")
+    if not name_column:
+        raise typer.BadParameter("Could not detect organization name column in input CSV.")
+
+    result_columns = [
+        "_zefix_query_name_normalized",
+        "_zefix_match_status",
+        "_zefix_match_count",
+        "_zefix_match_uids",
+        "_zefix_match_names",
+        "_zefix_uid",
+        "_zefix_legal_form",
+        "_zefix_purpose",
+        "_zefix_status",
+        "_zefix_checked_at",
+        "_zefix_error",
+    ]
+
+    text_result_columns = [
+        "_zefix_query_name_normalized",
+        "_zefix_match_status",
+        "_zefix_match_uids",
+        "_zefix_match_names",
+        "_zefix_uid",
+        "_zefix_legal_form",
+        "_zefix_purpose",
+        "_zefix_status",
+        "_zefix_checked_at",
+        "_zefix_error",
+    ]
+
+    for col in result_columns:
+        if col not in base_df.columns:
+            base_df[col] = pd.NA
+
+    if output_path.exists() and output_path.resolve() != input_path.resolve() and not refresh:
+        existing_df = pd.read_csv(output_path, encoding="utf-8-sig")
+        if "_org_id" in existing_df.columns:
+            existing_df = existing_df.drop_duplicates(subset="_org_id", keep="last")
+            existing_result_columns = [c for c in result_columns if c in existing_df.columns]
+            existing_subset = existing_df[["_org_id", *existing_result_columns]].rename(
+                columns={c: f"{c}_existing" for c in existing_result_columns}
+            )
+            base_df = base_df.merge(existing_subset, on="_org_id", how="left")
+            for col in existing_result_columns:
+                existing_col = f"{col}_existing"
+                base_df[col] = base_df[col].where(
+                    ~(base_df[col].isna() | (base_df[col].astype(str).str.strip() == "")),
+                    base_df[existing_col],
+                )
+                base_df = base_df.drop(columns=[existing_col])
+
+    for col in text_result_columns:
+        base_df[col] = base_df[col].astype(object).where(base_df[col].notna(), "")
+
+    base_df["_zefix_match_count"] = pd.to_numeric(
+        base_df["_zefix_match_count"], errors="coerce"
+    ).fillna(0).astype(int)
+
+    if "_excluded_reason" in base_df.columns:
+        excluded_mask = has_exclusion_reason_series(base_df["_excluded_reason"])
+    else:
+        excluded_mask = pd.Series(False, index=base_df.index)
+
+    pending_mask = (
+        (
+            base_df["_zefix_match_status"].isna()
+            | (base_df["_zefix_match_status"].astype(str).str.strip() == "")
+        )
+        & ~excluded_mask
+    )
+    pending_df = base_df[pending_mask]
+
+    if refresh:
+        pending_df = base_df[~excluded_mask].copy()
+
+    if debug_org_id and debug_org_name:
+        raise typer.BadParameter("Use either --debug-org-id or --debug-org-name, not both.")
+    if subset and subset_size <= 0:
+        raise typer.BadParameter("--size/-n must be greater than 0 when --subset is used.")
+    if stop_after is not None and stop_after <= 0:
+        raise typer.BadParameter("--stop-after must be greater than 0.")
+    if subset and (debug_sample or debug_org_id or debug_org_name):
+        raise typer.BadParameter("Use either subset mode or debug mode, not both.")
+
+    def save_checkpoint() -> None:
+        temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+        base_df.to_csv(temp_path, index=False, encoding="utf-8-sig")
+        temp_path.replace(output_path)
+
+    if debug_sample or debug_org_id or debug_org_name:
+        import random
+
+        used_seed: int | None = None
+        sample_row = None
+
+        if debug_org_id:
+            matched_rows = base_df[
+                base_df["_org_id"].astype(str).str.strip() == debug_org_id.strip()
+            ]
+            if matched_rows.empty:
+                raise typer.BadParameter(
+                    f"No organization found for --debug-org-id={debug_org_id!r}"
+                )
+            sample_row = matched_rows.iloc[-1]
+        elif debug_org_name:
+            target_name = debug_org_name.strip().lower()
+            matched_rows = base_df[
+                base_df[name_column].astype(str).str.strip().str.lower() == target_name
+            ]
+            if matched_rows.empty:
+                raise typer.BadParameter(
+                    f"No organization found for --debug-org-name={debug_org_name!r}"
+                )
+            if len(matched_rows) > 1:
+                preview = matched_rows[["_org_id", name_column]].head(10)
+                console.print("[red]Multiple organizations match --debug-org-name.[/red]")
+                console.print(preview.to_string(index=False))
+                raise typer.Exit(code=1)
+            sample_row = matched_rows.iloc[0]
+        else:
+            sample_df = pending_df if not pending_df.empty else base_df
+            if sample_df.empty:
+                console.print("[yellow]No organizations available for debug sample.[/yellow]")
+                return
+            used_seed = (
+                debug_seed if debug_seed is not None else random.SystemRandom().randrange(1, 10**9)
+            )
+            sample_row = sample_df.sample(n=1, random_state=used_seed).iloc[0]
+
+        org_id = str(sample_row.get("_org_id", "") or "").strip()
+        org_name = str(sample_row.get(name_column, "") or "").strip()
+        if not org_name:
+            raise typer.BadParameter("Selected debug row has no organization name.")
+
+        result = enrich_with_zefix(org_name, settings=settings, canton=canton, active_only=False)
+        console.print("[bold]ZEFIX debug sample[/bold]")
+        if used_seed is not None:
+            console.print(f"Seed: {used_seed}")
+        console.print(f"Org ID: {org_id or '-'}")
+        console.print(f"Org: {org_name}")
+        console.print(f"Normalized query: {result.query_name_normalized or '-'}")
+        console.print(f"Match status: {result.match_status}")
+        console.print(f"Match count: {result.match_count}")
+        console.print(f"Candidate UIDs: {result.match_uids or '-'}")
+        console.print(f"Candidate names: {result.match_names or '-'}")
+        console.print(f"UID: {result.uid or '-'}")
+        console.print(f"Legal form: {result.legal_form or '-'}")
+        console.print(f"Status: {result.status or '-'}")
+        purpose_preview = (
+            (result.purpose[:220] + "...") if len(result.purpose) > 220 else (result.purpose or "-")
+        )
+        console.print(f"Purpose: {purpose_preview}")
+        if result.error:
+            console.print(f"Error: {result.error}")
+        return
+
+    if pending_df.empty:
+        save_checkpoint()
+        console.print("[green]No pending organizations for ZEFIX enrichment.[/green]")
+        console.print(f"Saved: {output_path}")
+        return
+
+    if subset:
+        import random
+
+        seed = subset_seed if subset_seed is not None else random.SystemRandom().randrange(1, 10**9)
+        n = min(int(subset_size), len(pending_df))
+        pending_df = pending_df.sample(n=n, random_state=seed)
+        print_summary(
+            "ZEFIX Subset",
+            [("Selected", n), ("Seed", seed), ("Canton", canton), ("activeOnly", False)],
+        )
+
+    if stop_after is not None:
+        pending_df = pending_df.head(stop_after)
+
+    if pending_df.empty:
+        console.print("[yellow]No organizations selected for ZEFIX enrichment.[/yellow]")
+        return
+
+    pending_indices = list(pending_df.index)
+    pending_total = len(pending_indices)
+    status_counts = {
+        "matched": 0,
+        "no_match": 0,
+        "multiple_matches": 0,
+        "search_error": 0,
+        "detail_error": 0,
+    }
+    progress = {"completed": 0}
+
+    console.print(f"Enriching ZEFIX information for {pending_total} organizations...")
+
+    def show_progress(force: bool = False) -> None:
+        completed = progress["completed"]
+        if interactive:
+            status = (
+                f"\r[{completed}/{pending_total}] "
+                f"matched={status_counts['matched']} "
+                f"no_match={status_counts['no_match']} "
+                f"multi={status_counts['multiple_matches']} "
+                f"errors={status_counts['search_error'] + status_counts['detail_error']}"
+            )
+            typer.echo(status, nl=False)
+            if force:
+                typer.echo("")
+            return
+
+        if force or completed % 25 == 0:
+            console.print(
+                f"[{completed}/{pending_total}] "
+                f"matched={status_counts['matched']} "
+                f"no_match={status_counts['no_match']} "
+                f"multi={status_counts['multiple_matches']} "
+                f"errors={status_counts['search_error'] + status_counts['detail_error']}"
+            )
+
+    def on_result(batch_index: int, result) -> None:
+        row_index = pending_indices[batch_index]
+        base_df.at[row_index, "_zefix_query_name_normalized"] = result.query_name_normalized
+        base_df.at[row_index, "_zefix_match_status"] = result.match_status
+        base_df.at[row_index, "_zefix_match_count"] = int(result.match_count)
+        base_df.at[row_index, "_zefix_match_uids"] = result.match_uids
+        base_df.at[row_index, "_zefix_match_names"] = result.match_names
+        base_df.at[row_index, "_zefix_uid"] = result.uid
+        base_df.at[row_index, "_zefix_legal_form"] = result.legal_form
+        base_df.at[row_index, "_zefix_purpose"] = result.purpose
+        base_df.at[row_index, "_zefix_status"] = result.status
+        base_df.at[row_index, "_zefix_checked_at"] = result.checked_at
+        base_df.at[row_index, "_zefix_error"] = result.error
+
+        status_key = str(result.match_status or "").strip().lower()
+        if status_key in status_counts:
+            status_counts[status_key] += 1
+        else:
+            status_counts["search_error"] += 1
+
+        progress["completed"] += 1
+
+        save_checkpoint()
+        show_progress()
+
+    save_checkpoint()
+    try:
+        enrich_with_zefix_batch(
+            pending_df.to_dict("records"),
+            settings,
+            name_column=name_column,
+            canton=canton,
+            active_only=False,
+            on_result=on_result,
+        )
+    except ExternalApiAccessError as e:
+        show_progress(force=True)
+        save_checkpoint()
+        print_warning("ZEFIX enrichment stopped early due to API access issue. Progress was saved.")
+        print_error(f"{e.provider}: {e.reason}")
+        print_summary(
+            "ZEFIX Enrichment Paused",
+            [
+                ("Processed", progress["completed"]),
+                ("Remaining", max(0, pending_total - progress["completed"])),
+                ("Matched", status_counts["matched"]),
+                ("No match", status_counts["no_match"]),
+                ("Multiple matches", status_counts["multiple_matches"]),
+                (
+                    "Errors",
+                    status_counts["search_error"] + status_counts["detail_error"],
+                ),
+                ("Saved", str(output_path)),
+            ],
+        )
+        raise typer.Exit(code=1)
+    except KeyboardInterrupt:
+        show_progress(force=True)
+        save_checkpoint()
+        print_warning("ZEFIX enrichment stopped early. Progress was checkpointed.")
+        print_summary(
+            "ZEFIX Enrichment Paused",
+            [
+                ("Processed", progress["completed"]),
+                ("Remaining", max(0, pending_total - progress["completed"])),
+                ("Matched", status_counts["matched"]),
+                ("No match", status_counts["no_match"]),
+                ("Multiple matches", status_counts["multiple_matches"]),
+                (
+                    "Errors",
+                    status_counts["search_error"] + status_counts["detail_error"],
+                ),
+                ("Saved", str(output_path)),
+            ],
+        )
+        return
+
+    show_progress(force=True)
+
+    matched_total = int((base_df["_zefix_match_status"].astype(str).str.strip() == "matched").sum())
+    print_summary(
+        "ZEFIX Enrichment Results",
+        [
+            ("Processed now", progress["completed"]),
+            ("Matched now", status_counts["matched"]),
+            ("No match now", status_counts["no_match"]),
+            ("Multiple matches now", status_counts["multiple_matches"]),
+            ("Errors now", status_counts["search_error"] + status_counts["detail_error"]),
+            ("Matched total", matched_total),
+            ("Saved", str(output_path)),
+        ],
+    )
+
+
+@app.command(name="guess-legal-form")
+def guess_legal_form(
+    input_file: Path | None = typer.Option(
+        None,
+        "--input",
+        "-i",
+        help="Path to input CSV (default: filtered/organizations_with_websites.csv)",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Path to output CSV with legal-form guess columns (default: in-place)",
+    ),
+) -> None:
+    """Guess legal form from organization name when ZEFIX has no entry."""
+    import re
+
+    import pandas as pd
+
+    from benefind.config import DATA_DIR
+
+    settings = load_settings()
+    _setup_logging(settings.log_level)
+
+    input_path = input_file or (DATA_DIR / "filtered" / "organizations_with_websites.csv")
+    output_path = output_file or input_path
+
+    if not input_path.exists():
+        print_error(f"Input file not found: {input_path}")
+        raise typer.Exit(code=1)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    if df.empty:
+        console.print("[yellow]Input CSV is empty. Nothing to process.[/yellow]")
+        return
+
+    name_column = _detect_first_column(list(df.columns), NAME_COLUMN_CANDIDATES, default="")
+    if not name_column:
+        raise typer.BadParameter("Could not detect organization name column in input CSV.")
+
+    for col in [
+        "_legal_form_guess",
+        "_legal_form_guess_source",
+        "_legal_form_final",
+        "_legal_form_final_source",
+    ]:
+        if col not in df.columns:
+            df[col] = ""
+        df[col] = df[col].astype(object).where(df[col].notna(), "")
+
+    if "_zefix_legal_form" not in df.columns:
+        df["_zefix_legal_form"] = ""
+    df["_zefix_legal_form"] = df["_zefix_legal_form"].astype(object).where(
+        df["_zefix_legal_form"].notna(), ""
+    )
+
+    keyword_to_canonical = {
+        "Verein": "Verein",
+        "GmbH": "Gesellschaft mit beschränkter Haftung",
+        "Stiftung": "Stiftung",
+    }
+    token_patterns = {
+        keyword: re.compile(rf"(?<!\w){re.escape(keyword)}(?!\w)", re.IGNORECASE)
+        for keyword in keyword_to_canonical
+    }
+
+    guessed_count = 0
+    zefix_count = 0
+    unknown_count = 0
+    per_guess_counts = {keyword: 0 for keyword in keyword_to_canonical}
+
+    def _guess_from_name(name: str) -> tuple[str, str]:
+        text = str(name or "")
+        first_match: tuple[int, str, str] | None = None
+        for keyword in keyword_to_canonical:
+            match = token_patterns[keyword].search(text)
+            if not match:
+                continue
+            candidate = (match.start(), keyword_to_canonical[keyword], keyword)
+            if first_match is None or candidate[0] < first_match[0]:
+                first_match = candidate
+        if not first_match:
+            return "", ""
+        return first_match[1], first_match[2]
+
+    for idx, row in df.iterrows():
+        name = str(row.get(name_column, "") or "")
+        guess, matched_keyword = _guess_from_name(name)
+
+        df.at[idx, "_legal_form_guess"] = guess
+        df.at[idx, "_legal_form_guess_source"] = "name_keyword" if guess else ""
+
+        zefix_legal_form = str(row.get("_zefix_legal_form", "") or "").strip()
+        if zefix_legal_form:
+            final = zefix_legal_form
+            final_source = "zefix"
+            zefix_count += 1
+        elif guess:
+            final = guess
+            final_source = "name_keyword"
+            guessed_count += 1
+            per_guess_counts[matched_keyword] += 1
+        else:
+            final = ""
+            final_source = ""
+            unknown_count += 1
+
+        df.at[idx, "_legal_form_final"] = final
+        df.at[idx, "_legal_form_final_source"] = final_source
+
+    temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    df.to_csv(temp_path, index=False, encoding="utf-8-sig")
+    temp_path.replace(output_path)
+
+    print_summary(
+        "Legal Form Guess Results",
+        [
+            ("Rows processed", len(df)),
+            ("Final from ZEFIX", zefix_count),
+            ("Final from name guess", guessed_count),
+            ("Final still empty", unknown_count),
+            ("Guess Verein", per_guess_counts["Verein"]),
+            ("Guess GmbH", per_guess_counts["GmbH"]),
+            ("Guess Stiftung", per_guess_counts["Stiftung"]),
+            ("Saved", str(output_path)),
+        ],
+    )
+
+
 @app.command()
 def prepare_scraping(
     input_file: Path | None = typer.Option(
@@ -3138,7 +3690,7 @@ def review(
         ...,
         help=(
             "What to review: locations, websites, url-normalization, "
-            "scrape-readiness, scrape-quality"
+            "scrape-readiness, scrape-quality, zefix-information"
         ),
     ),
 ) -> None:
@@ -3149,6 +3701,7 @@ def review(
         review_scrape_readiness,
         review_url_normalization,
         review_websites,
+        review_zefix_information,
     )
 
     settings = load_settings()
@@ -3165,10 +3718,12 @@ def review(
         review_scrape_readiness()
     elif target in {"scrape-quality", "scrape_quality"}:
         review_scrape_quality()
+    elif target in {"zefix-information", "zefix_information", "zefix"}:
+        review_zefix_information()
     else:
         raise typer.BadParameter(
             "Expected one of: locations, websites, url-normalization, "
-            "scrape-readiness, scrape-quality"
+            "scrape-readiness, scrape-quality, zefix-information"
         )
 
 

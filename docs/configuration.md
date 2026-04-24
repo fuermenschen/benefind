@@ -15,6 +15,13 @@ config/settings.local.toml
 
 The local settings file is gitignored.
 
+Environment variables are loaded from project-root `.env`:
+
+- `OPENAI_API_KEY` (LLM verification during discover)
+- `BRAVE_API_KEY` (primary web search provider)
+- `FIRECRAWL_API_KEY` (optional discover fallback provider)
+- `ZEFIX_BASE_URL`, `ZEFIX_USERNAME`, `ZEFIX_PASSWORD` (ZEFIX enrichment + UID lookup)
+
 Location filtering settings are in `settings.toml` under `[filtering]`:
 
 - `fuzzy_match_threshold`
@@ -87,6 +94,16 @@ Scraping settings are in `settings.toml` under `[scraping]`:
 - `prepare_fallback_max_visits` (max pages visited during local-link fallback)
 - `prepare_max_workers` (concurrent organization workers for `prepare-scraping`)
 
+ZEFIX settings are in `settings.toml` under `[zefix]`:
+
+- `timeout_seconds`
+- `max_retries`
+- `retry_backoff_seconds`
+- `max_requests_per_second` (global rate limit shared across all ZEFIX workers)
+- `max_burst` (token-bucket burst size)
+- `max_workers` (parallel organization lookups for `add-zefix-information`)
+- `candidate_preview_limit` (how many candidate UIDs/names are stored for review context)
+
 URL normalization workflow settings:
 
 - `benefind normalize-urls` builds normalization suggestions and mandatory review queue columns
@@ -99,3 +116,23 @@ URL normalization workflow settings:
   root final URLs use host scope; non-root final URLs keep exact path-prefix scope.
   Prepare-scraping still applies reachability probes (scheme/www/redirect handling),
   but does not perform heuristic scope rewrites.
+
+ZEFIX enrichment workflow (details in `docs/pipeline-usage.md`):
+
+- `benefind add-zefix-information` writes `_zefix_*` metadata into
+  `data/filtered/organizations_with_websites.csv` and checkpoints after each processed row.
+- default behavior processes only rows with empty `_zefix_match_status` and skips excluded rows;
+  `--refresh` recomputes all non-excluded rows.
+- outcome statuses in `_zefix_match_status`: `matched`, `no_match`, `multiple_matches`,
+  `search_error`, `detail_error`.
+- `benefind review zefix-information` queues only unresolved/problem statuses
+  (`multiple_matches`, `detail_error`, `search_error`) and supports manual UID apply,
+  exclusion, reset, skip, and quit.
+
+Legal-form guessing workflow (details in `docs/pipeline-usage.md`):
+
+- `benefind guess-legal-form` writes `_legal_form_guess`, `_legal_form_guess_source`,
+  `_legal_form_final`, `_legal_form_final_source`.
+- guesses are keyword-based from organization name (`Verein`, `GmbH`, `Stiftung`, case-insensitive)
+  and mapped to canonical labels (`Verein`, `Gesellschaft mit beschränkter Haftung`, `Stiftung`).
+- `_legal_form_final` precedence is ZEFIX first (`_zefix_legal_form`), then keyword guess.

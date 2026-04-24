@@ -35,6 +35,8 @@ dependencies = [
     "playwright>=1.52",
     # Environment variables
     "python-dotenv>=1.0",
+    # Retry/backoff helpers
+    "tenacity>=9.0",
 ]
 
 [project.scripts]

@@ -6,6 +6,7 @@
 - `uv`
 - Brave Search API key (for website discovery)
 - Firecrawl API key (optional, for discover fallback)
+- ZEFIX PublicREST credentials (optional, for ZEFIX enrichment/review)
 - OpenAI API key
 
 ## Setup
@@ -24,6 +25,7 @@ cp .env.example .env
 # - BRAVE_API_KEY (discover)
 # - FIRECRAWL_API_KEY (discover fallback, optional)
 # - OPENAI_API_KEY (discover LLM verification)
+# - ZEFIX_BASE_URL, ZEFIX_USERNAME, ZEFIX_PASSWORD (ZEFIX enrichment)
 ```
 
 ## Notes

@@ -21,6 +21,8 @@ benefind/
     ├── parse_pdf.py         # PDF parsing
     ├── filter_locations.py  # Location filtering
     ├── discover_websites.py # Website discovery
+    ├── zefix.py             # ZEFIX enrichment + UID lookup helpers
+    ├── legal_forms.py       # Swiss legal-form catalog/mappings
     ├── scrape.py            # Web scraping
     ├── scrape_clean.py      # Post-scrape segment dedup cleaning
     ├── review.py            # Interactive manual review flows

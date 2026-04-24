@@ -6,6 +6,9 @@
 uv run benefind parse
 uv run benefind filter
 uv run benefind discover
+uv run benefind add-zefix-information
+uv run benefind review zefix-information
+uv run benefind guess-legal-form
 uv run benefind normalize-urls
 uv run benefind review-url-normalization
 uv run benefind prepare-scraping
@@ -21,13 +24,16 @@ uv run benefind scrape-clean
 uv run benefind parse       # Step 1: Download & parse PDF
 uv run benefind filter      # Step 2: Filter to Bezirk Winterthur
 uv run benefind discover    # Step 3a: Find org websites
-uv run benefind normalize-urls          # Step 3b: normalize + build mandatory URL review queue
-uv run benefind review-url-normalization # Step 3b-review: decide final URL per org
-uv run benefind prepare-scraping        # Step 3c: robots/scope URL planning + ranking
-uv run benefind review scrape-readiness # Step 3c-review: resolve blocked/seed-unreachable prep rows
-uv run benefind scrape      # Step 3d: Scrape websites
-uv run benefind review scrape-quality   # Step 3d-review: review no/poor scrape outcomes
-uv run benefind scrape-clean # Step 3e: remove duplicate intra-org content segments
+uv run benefind add-zefix-information   # Step 3b: enrich with ZEFIX UID/legal form/purpose/status
+uv run benefind review zefix-information # Step 3b-review: resolve ZEFIX problem rows
+uv run benefind guess-legal-form        # Step 3c: fill legal-form guess/final columns when ZEFIX missing
+uv run benefind normalize-urls          # Step 3d: normalize + build mandatory URL review queue
+uv run benefind review-url-normalization # Step 3d-review: decide final URL per org
+uv run benefind prepare-scraping        # Step 3e: robots/scope URL planning + ranking
+uv run benefind review scrape-readiness # Step 3e-review: resolve blocked/seed-unreachable prep rows
+uv run benefind scrape      # Step 3f: Scrape websites
+uv run benefind review scrape-quality   # Step 3f-review: review no/poor scrape outcomes
+uv run benefind scrape-clean # Step 3g: remove duplicate intra-org content segments
 ```
 
 ## Cost-safe testing on a subset
@@ -37,6 +43,9 @@ To avoid burning API credits during iteration, create a small subset first:
 ```bash
 uv run benefind subset              # default: 20 random rows
 uv run benefind discover
+uv run benefind add-zefix-information
+uv run benefind review zefix-information
+uv run benefind guess-legal-form
 uv run benefind normalize-urls
 uv run benefind review-url-normalization
 uv run benefind prepare-scraping
@@ -53,6 +62,9 @@ steps. Default behavior doubles the current subset size (for example
 ```bash
 uv run benefind extend
 uv run benefind discover
+uv run benefind add-zefix-information
+uv run benefind review zefix-information
+uv run benefind guess-legal-form
 uv run benefind normalize-urls
 uv run benefind review-url-normalization
 uv run benefind prepare-scraping
@@ -123,13 +135,63 @@ uv run benefind discover --debug-org-name "Musikkollegium Winterthur"
 
 In debug mode, discover also prints the simulated final decision stage and, when LLM verification is triggered, the LLM verification prompt and response text.
 
+`benefind add-zefix-information` behavior highlights:
+
+- reads and writes `data/filtered/organizations_with_websites.csv` by default
+- enriches each non-excluded organization with ZEFIX metadata columns:
+  `_zefix_query_name_normalized`, `_zefix_match_status`, `_zefix_match_count`,
+  `_zefix_match_uids`, `_zefix_match_names`, `_zefix_uid`, `_zefix_legal_form`,
+  `_zefix_purpose`, `_zefix_status`, `_zefix_checked_at`, `_zefix_error`
+- uses exact normalized-name matching against ZEFIX search candidates
+- writes per-row checkpoints immediately (safe resume after interruption)
+- processes pending rows only by default; use `--refresh` to recompute all non-excluded rows
+- supports partial/debug runs:
+
+```bash
+uv run benefind add-zefix-information --subset -n 20 --subset-seed 42
+uv run benefind add-zefix-information --debug-sample --debug-seed 42
+uv run benefind add-zefix-information --debug-org-id org_xxxxx_1
+uv run benefind add-zefix-information --debug-org-name "Musikkollegium Winterthur"
+uv run benefind add-zefix-information --stop-after 50
+```
+
+- tracks ZEFIX outcome status in `_zefix_match_status`:
+  `matched`, `no_match`, `multiple_matches`, `search_error`, `detail_error`
+- uses a global, cross-worker rate limiter (`zefix.max_requests_per_second`) plus
+  exponential backoff retries for transient ZEFIX errors
+
+`benefind guess-legal-form` behavior highlights:
+
+- writes four columns in `data/filtered/organizations_with_websites.csv`:
+  `_legal_form_guess`, `_legal_form_guess_source`, `_legal_form_final`, `_legal_form_final_source`
+- guesses only from organization name tokens with word boundaries (case-insensitive):
+  `Verein`, `GmbH`, `Stiftung`
+- stores canonical labels in final output (for consistency with ZEFIX values):
+  `Verein`, `Gesellschaft mit beschränkter Haftung`, `Stiftung`
+- final legal form precedence: `_zefix_legal_form` first, then keyword guess, else empty
+- no manual review step; command is deterministic and idempotent for the same input
+
 ## Manual review helpers
 
 ```bash
 uv run benefind review locations                    # include/exclude uncertain location matches
 uv run benefind review websites                     # review uncertain websites via wizard
+uv run benefind review zefix-information            # review unresolved ZEFIX outcomes
 uv run benefind review scrape-quality               # review no/poor scrape outcomes
 ```
+
+ZEFIX review (`benefind review zefix-information`) actions:
+
+- set UID (`u`): fetches and applies official ZEFIX details for a manually chosen UID
+- exclude (`x`): excludes organization from downstream pipeline with required reason
+- reset (`r`): clears `_zefix_*` fields so row can be re-enriched later
+- skip (`s`) or quit (`q`)
+
+Queue policy:
+
+- includes only `multiple_matches`, `detail_error`, `search_error`
+- skips expected `no_match` rows
+- skips already excluded rows
 
 Website review wizard actions:
 
@@ -246,7 +308,7 @@ run a quick alignment check before relying on downstream outputs:
   `_website_origin`, score/decision metadata)
 - verify exclusion semantics still match expectations for `scrape`
   (excluded rows should be skipped)
-- run `discover -> review websites -> normalize-urls -> review-url-normalization -> prepare-scraping -> scrape -> review scrape-quality -> scrape-clean` on a small
+- run `discover -> review websites -> add-zefix-information -> review zefix-information -> guess-legal-form -> normalize-urls -> review-url-normalization -> prepare-scraping -> scrape -> review scrape-quality -> scrape-clean` on a small
   subset first and inspect artifacts under `data/orgs/`
 - if schema assumptions changed, update step-local logic and docs in one pass
 

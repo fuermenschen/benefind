@@ -152,3 +152,25 @@ max_tokens = 1000
 
 # Confidence threshold (0.0-1.0). Below this, flag for manual review.
 confidence_threshold = 0.7
+
+[zefix]
+# ZEFIX API request timeout in seconds
+timeout_seconds = 20
+
+# Max retries for transient errors (timeouts, 5xx, 429)
+max_retries = 2
+
+# Base backoff delay for retries in seconds
+retry_backoff_seconds = 1.0
+
+# Polite global request cap for ZEFIX across all workers
+max_requests_per_second = 4.0
+
+# Token-bucket burst size for short spikes
+max_burst = 2
+
+# Concurrent workers for ZEFIX enrichment
+max_workers = 8
+
+# Number of match candidates to keep in context columns
+candidate_preview_limit = 8

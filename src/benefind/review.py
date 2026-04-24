@@ -39,6 +39,7 @@ from benefind.exclusion_reasons import (
     ExcludeReason,
     has_exclusion_reason,
 )
+from benefind.external_api import ExternalApiAccessError
 from benefind.prepare_scraping import (
     PrepareCheckpointWriter,
     load_org_targets,
@@ -124,6 +125,16 @@ _SCRAPE_QUALITY_ACTIONS = [
     ("q", "Quit"),
 ]
 _SCRAPE_QUALITY_VALID_KEYS = [k for k, _ in _SCRAPE_QUALITY_ACTIONS] + ["esc"]
+
+# Key bindings for ZEFIX information review
+_ZEFIX_INFO_ACTIONS = [
+    ("u", "Set UID"),
+    ("x", "Exclude org"),
+    ("r", "Reset ZEFIX"),
+    ("s", "Skip"),
+    ("q", "Quit"),
+]
+_ZEFIX_INFO_VALID_KEYS = [k for k, _ in _ZEFIX_INFO_ACTIONS] + ["esc"]
 
 
 # ---------------------------------------------------------------------------
@@ -2441,5 +2452,292 @@ def review_scrape_readiness() -> dict[str, int]:
         "approved": approved,
         "excluded": excluded,
         "deferred": deferred,
+        "remaining": remaining,
+    }
+
+
+def _ensure_zefix_columns(df: pd.DataFrame) -> pd.DataFrame:
+    defaults: dict[str, object] = {
+        "_zefix_query_name_normalized": "",
+        "_zefix_match_status": "",
+        "_zefix_match_count": 0,
+        "_zefix_match_uids": "",
+        "_zefix_match_names": "",
+        "_zefix_uid": "",
+        "_zefix_legal_form": "",
+        "_zefix_purpose": "",
+        "_zefix_status": "",
+        "_zefix_checked_at": "",
+        "_zefix_error": "",
+    }
+    for column, default in defaults.items():
+        if column not in df.columns:
+            df[column] = default
+
+    text_columns = [
+        "_zefix_query_name_normalized",
+        "_zefix_match_status",
+        "_zefix_match_uids",
+        "_zefix_match_names",
+        "_zefix_uid",
+        "_zefix_legal_form",
+        "_zefix_purpose",
+        "_zefix_status",
+        "_zefix_checked_at",
+        "_zefix_error",
+    ]
+    for column in text_columns:
+        df[column] = df[column].astype(object).where(df[column].notna(), "")
+
+    df["_zefix_match_count"] = pd.to_numeric(df["_zefix_match_count"], errors="coerce").fillna(0)
+    df["_zefix_match_count"] = df["_zefix_match_count"].astype(int)
+    return df
+
+
+def _zefix_info_queue_org_ids(df: pd.DataFrame) -> list[str]:
+    if "_org_id" not in df.columns:
+        return []
+    if "_excluded_reason" not in df.columns:
+        df["_excluded_reason"] = ""
+
+    problem_statuses = {"multiple_matches", "detail_error", "search_error"}
+    deduped = df.drop_duplicates(subset="_org_id", keep="last")
+    queue: list[str] = []
+    for _, row in deduped.iterrows():
+        org_id = str(row.get("_org_id", "") or "").strip()
+        if not org_id:
+            continue
+        if has_exclusion_reason(row.get("_excluded_reason", "")):
+            continue
+        status = str(row.get("_zefix_match_status", "") or "").strip().lower()
+        if status in problem_statuses:
+            queue.append(org_id)
+    return queue
+
+
+def _zefix_info_org_panel(org_name: str, org_id: str, position: int, total: int) -> None:
+    rows = [
+        ("Name", f"[{C_PRIMARY}]{org_name}[/{C_PRIMARY}]"),
+        ("Org ID", f"[{C_MUTED}]{org_id}[/{C_MUTED}]"),
+    ]
+    console.print(
+        make_panel(
+            make_kv_table(rows),
+            f"ZEFIX Review  [{C_MUTED}]{position}/{total}[/{C_MUTED}]",
+        )
+    )
+
+
+def _zefix_info_panel(row: pd.Series) -> None:
+    purpose = str(row.get("_zefix_purpose", "") or "").strip()
+    purpose_preview = f"{purpose[:220]}..." if len(purpose) > 220 else (purpose or "-")
+    rows = [
+        ("Match status", str(row.get("_zefix_match_status", "") or "-")),
+        ("Match count", str(int(float(row.get("_zefix_match_count", 0) or 0)))),
+        ("Candidate UIDs", str(row.get("_zefix_match_uids", "") or "-")),
+        ("Candidate names", str(row.get("_zefix_match_names", "") or "-")[:180]),
+        ("UID", str(row.get("_zefix_uid", "") or "-")),
+        ("Legal form", str(row.get("_zefix_legal_form", "") or "-")),
+        ("Status", str(row.get("_zefix_status", "") or "-")),
+        ("Purpose", f"[{C_MUTED}]{purpose_preview}[/{C_MUTED}]"),
+        ("Error", str(row.get("_zefix_error", "") or "-")),
+    ]
+    console.print(make_panel(make_kv_table(rows), "ZEFIX Details"))
+
+
+def _zefix_info_actions_panel() -> None:
+    console.print(make_panel(make_actions_table(_ZEFIX_INFO_ACTIONS), "Actions"))
+
+
+def review_zefix_information() -> dict[str, int]:
+    """Review unresolved ZEFIX outcomes and decide next action."""
+    from benefind.zefix import lookup_zefix_uid
+
+    websites_path = DATA_DIR / "filtered" / "organizations_with_websites.csv"
+    if not websites_path.exists():
+        console.print(f"[yellow]No file found at {websites_path}[/yellow]")
+        console.print("Run [bold]benefind add-zefix-information[/bold] first.")
+        return {"manual_uid": 0, "excluded": 0, "reset": 0, "remaining": 0}
+
+    try:
+        websites_df = _load_latest_websites_df(websites_path)
+    except ValueError as exc:
+        print_warning(str(exc))
+        return {"manual_uid": 0, "excluded": 0, "reset": 0, "remaining": 0}
+
+    websites_df = _ensure_zefix_columns(websites_df)
+    _save_websites_df(websites_df, websites_path)
+
+    queue_org_ids = _zefix_info_queue_org_ids(websites_df)
+    if not queue_org_ids:
+        console.print("[green]No zefix-information rows pending review.[/green]")
+        return {"manual_uid": 0, "excluded": 0, "reset": 0, "remaining": 0}
+
+    progress = ReviewProgress(total=len(queue_org_ids))
+    manual_uid = 0
+    excluded = 0
+    reset = 0
+    quit_requested = False
+    settings = load_settings()
+
+    for position, org_id in enumerate(queue_org_ids, start=1):
+        progress.current = position - 1
+
+        while True:
+            websites_df = _load_latest_websites_df(websites_path)
+            websites_df = _ensure_zefix_columns(websites_df)
+            mask = websites_df["_org_id"].astype(str).str.strip() == org_id
+            if not mask.any():
+                progress.mark_skipped()
+                break
+
+            row = websites_df[mask].iloc[-1]
+            if has_exclusion_reason(row.get("_excluded_reason", "")):
+                progress.mark_skipped()
+                break
+
+            status = str(row.get("_zefix_match_status", "") or "").strip().lower()
+            if status not in {"multiple_matches", "detail_error", "search_error"}:
+                progress.mark_skipped()
+                break
+
+            org_name = str(row.get("_org_name", "") or "").strip()
+            if not org_name:
+                name_col = _detect_first_column(websites_df, NAME_COLUMN_CANDIDATES, default="")
+                if name_col:
+                    org_name = str(row.get(name_col, "") or "").strip()
+            org_name = org_name or "Unknown"
+
+            clear()
+            console.print(progress.as_panel("ZEFIX Information Review"))
+            _zefix_info_org_panel(org_name, org_id, position, len(queue_org_ids))
+            _zefix_info_panel(row)
+            _zefix_info_actions_panel()
+
+            try:
+                key = wait_for_key(_ZEFIX_INFO_VALID_KEYS)
+            except KeyboardInterrupt:
+                quit_requested = True
+                break
+
+            if key in ("q", "esc"):
+                quit_requested = True
+                break
+
+            if key == "s":
+                print_skip("Skipped")
+                progress.mark_skipped()
+                break
+
+            if key == "x":
+                reason_note = _prompt_exclusion_reason_no_text()
+                if reason_note is None:
+                    continue
+                reason, note = reason_note
+                if not confirm(f"Exclude '{org_name}' with reason {reason.value}?", default=False):
+                    print_skip("Cancelled")
+                    continue
+                _exclude_org_in_websites(websites_path, org_id, reason, note)
+                excluded += 1
+                progress.mark_excluded()
+                print_success(f"Excluded: {reason.value}")
+                break
+
+            if key == "r":
+                if not confirm(
+                    "Reset ZEFIX fields so this row can be re-enriched later?",
+                    default=True,
+                ):
+                    print_skip("Cancelled")
+                    continue
+
+                idx = websites_df[mask].index[-1]
+                for col in [
+                    "_zefix_query_name_normalized",
+                    "_zefix_match_status",
+                    "_zefix_match_uids",
+                    "_zefix_match_names",
+                    "_zefix_uid",
+                    "_zefix_legal_form",
+                    "_zefix_purpose",
+                    "_zefix_status",
+                    "_zefix_checked_at",
+                    "_zefix_error",
+                ]:
+                    websites_df.at[idx, col] = ""
+                websites_df.at[idx, "_zefix_match_count"] = 0
+                _save_websites_df(websites_df, websites_path)
+                reset += 1
+                progress.mark_accepted()
+                print_success("ZEFIX fields reset")
+                break
+
+            if key == "u":
+                default_uid = str(row.get("_zefix_uid", "") or "").strip()
+                uid = ask_text("UID (CHE...)", default=default_uid)
+                uid = str(uid or "").strip()
+                if not uid:
+                    print_skip("No UID entered")
+                    continue
+                if not confirm(f"Fetch and set ZEFIX data for UID {uid}?", default=True):
+                    print_skip("Cancelled")
+                    continue
+
+                try:
+                    uid_lookup = lookup_zefix_uid(uid, settings=settings)
+                except ExternalApiAccessError as exc:
+                    print_warning(f"{exc.provider}: {exc.reason}")
+                    continue
+
+                if uid_lookup.error:
+                    print_warning(f"UID lookup failed: {uid_lookup.error}")
+                    continue
+
+                idx = websites_df[mask].index[-1]
+                websites_df.at[idx, "_zefix_uid"] = uid_lookup.uid
+                websites_df.at[idx, "_zefix_legal_form"] = uid_lookup.legal_form
+                websites_df.at[idx, "_zefix_purpose"] = uid_lookup.purpose
+                websites_df.at[idx, "_zefix_status"] = uid_lookup.status
+                websites_df.at[idx, "_zefix_match_status"] = "matched"
+                websites_df.at[idx, "_zefix_match_count"] = 1
+                websites_df.at[idx, "_zefix_match_uids"] = uid_lookup.uid
+                websites_df.at[idx, "_zefix_match_names"] = uid_lookup.name
+                websites_df.at[idx, "_zefix_error"] = ""
+                websites_df.at[idx, "_zefix_checked_at"] = datetime.now(UTC).isoformat(
+                    timespec="seconds"
+                )
+                _save_websites_df(websites_df, websites_path)
+
+                manual_uid += 1
+                progress.mark_accepted()
+                print_success("UID applied")
+                break
+
+        if quit_requested:
+            break
+
+    final_df = _load_latest_websites_df(websites_path)
+    final_df = _ensure_zefix_columns(final_df)
+    remaining = len(_zefix_info_queue_org_ids(final_df))
+
+    clear()
+    print_summary(
+        "ZEFIX Information Review Paused"
+        if quit_requested
+        else "ZEFIX Information Review Complete",
+        [
+            ("Set UID manually", manual_uid),
+            ("Excluded", excluded),
+            ("Reset", reset),
+            ("Skipped", progress.skipped),
+            ("Remaining in queue", remaining),
+            ("Websites file", str(websites_path)),
+        ],
+    )
+
+    return {
+        "manual_uid": manual_uid,
+        "excluded": excluded,
+        "reset": reset,
         "remaining": remaining,
     }

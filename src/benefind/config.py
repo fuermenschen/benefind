@@ -96,6 +96,17 @@ class LlmConfig:
 
 
 @dataclass
+class ZefixConfig:
+    timeout_seconds: int = 20
+    max_retries: int = 2
+    retry_backoff_seconds: float = 1.0
+    max_requests_per_second: float = 4.0
+    max_burst: int = 2
+    max_workers: int = 8
+    candidate_preview_limit: int = 8
+
+
+@dataclass
 class PromptDefinition:
     id: str
     description: str
@@ -136,6 +147,7 @@ class Settings:
     scraping: ScrapingConfig = field(default_factory=ScrapingConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
     llm: LlmConfig = field(default_factory=LlmConfig)
+    zefix: ZefixConfig = field(default_factory=ZefixConfig)
     municipalities: MunicipalityConfig = field(default_factory=MunicipalityConfig)
     prompts: dict[str, PromptDefinition] = field(default_factory=dict)
 
@@ -196,6 +208,7 @@ def load_settings(config_dir: Path | None = None) -> Settings:
         scraping=ScrapingConfig(**settings_data.get("scraping", {})),
         search=SearchConfig(**settings_data.get("search", {})),
         llm=LlmConfig(**settings_data.get("llm", {})),
+        zefix=ZefixConfig(**settings_data.get("zefix", {})),
         municipalities=MunicipalityConfig(
             **muni_data.get("bezirk_winterthur", {}),
         ),
