@@ -7,7 +7,7 @@
 Human-auditable screening pipeline for tax-exempt nonprofits, combining deterministic methods with selective LLM verification to produce precise, explainable, reproducible decisions.
 
 > [!WARNING]
-> **Work in progress:** benefind is currently under active development. Data formats, scoring logic, CLI commands, and report outputs may change as we iterate.
+> **Work in progress:** benefind is currently under active development. Data formats, scoring logic, and CLI commands may change as we iterate.
 
 Built by [Verein für Menschen](https://hfm-winti.ch/verein) to support beneficiary partner
 selection for [Höhenmeter für Menschen](https://hfm-winti.ch), a charity run in Winterthur.
@@ -25,8 +25,6 @@ benefind takes the official Canton Zurich list of tax-exempt nonprofit organizat
 4. **Prepares + reviews scrape readiness** to ensure safe URL targets
 5. **Scrapes** key pages (respecting robots.txt)
 6. **Reviews scrape quality**, then **cleans duplicate intra-org content segments**
-7. **Evaluates** each organization against configurable criteria using targeted LLM prompts
-8. **Generates** a summary report for human decision-making
 
 Wherever uncertainty arises, items are flagged for manual review rather than silently decided.
 

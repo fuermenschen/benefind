@@ -4,7 +4,7 @@ All configuration lives in `config/`.
 
 - `settings.toml`: general settings (thresholds, delays, model choice)
 - `municipalities.toml`: list of municipalities in Bezirk Winterthur
-- `prompts.toml`: LLM prompt templates for organization evaluation
+- `prompts.toml`: prompt templates (legacy/evolving; not part of active CLI post-scrape execution)
 - `url_scoring.toml`: lexical URL ranking/exclusion rules for `prepare-scraping`
 
 For local machine overrides, create:
@@ -55,7 +55,6 @@ External API failure policy:
 - fail fast on unrecoverable access errors: quota exhausted, missing API key, invalid/forbidden key
 - keep retry behavior for transient rate limits and network/server hiccups
 - `discover` checkpoints after each processed row, so intermediate progress is preserved
-- `evaluate` persists completed and partial `evaluation.json` outputs before stopping
 
 Municipality matching lives in `config/municipalities.toml`:
 

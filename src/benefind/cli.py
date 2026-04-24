@@ -168,7 +168,6 @@ def _export_target_dirs(data_dir: Path) -> dict[str, Path]:
         "parsed": data_dir / "parsed",
         "filtered": data_dir / "filtered",
         "orgs": data_dir / "orgs",
-        "reports": data_dir / "reports",
     }
 
 
@@ -195,7 +194,6 @@ def _target_label(target: str) -> str:
         "parsed": "parsed",
         "filtered": "filtered",
         "orgs": "orgs (full directory)",
-        "reports": "reports",
     }
     return labels.get(target, target)
 
@@ -2630,112 +2628,6 @@ def scrape_clean(
 
 
 @app.command()
-def evaluate(
-    input_file: Path | None = typer.Option(None, "--input", "-i", help="Path to filtered CSV"),
-) -> None:
-    """Step 3d: Evaluate organizations using LLM.
-
-    Implementation maturity note:
-    This command drives a first-shot evaluate implementation. Verify current
-    discovery/review output columns still align with evaluate assumptions.
-    """
-    import pandas as pd
-
-    from benefind.config import DATA_DIR
-    from benefind.evaluate import evaluate_batch
-    from benefind.external_api import ExternalApiAccessError
-
-    settings = load_settings()
-    _setup_logging(settings.log_level)
-
-    input_path = input_file or (DATA_DIR / "filtered" / "organizations_with_websites.csv")
-    if not input_path.exists():
-        print_error(f"Input file not found: {input_path}")
-        console.print("Run [bold]benefind discover[/bold] first or pass [bold]--input[/bold].")
-        raise typer.Exit(code=1)
-
-    df = pd.read_csv(input_path, encoding="utf-8-sig")
-    if df.empty:
-        console.print("[yellow]No organizations found in input file. Nothing to evaluate.[/yellow]")
-        return
-
-    if "_excluded_reason" not in df.columns:
-        df["_excluded_reason"] = ""
-    excluded_mask = has_exclusion_reason_series(df["_excluded_reason"])
-    active_df = df[~excluded_mask].copy()
-    if active_df.empty:
-        console.print(
-            "[yellow]All organizations are excluded from pipeline. Nothing to evaluate.[/yellow]"
-        )
-        return
-
-    name_column = _detect_first_column(
-        list(df.columns),
-        NAME_COLUMN_CANDIDATES,
-    )
-    location_column = _detect_first_column(
-        list(df.columns),
-        ["Sitzort", "Sitz", "Ort", "Gemeinde"],
-        default="Sitzort",
-    )
-    purpose_column = _detect_first_column(
-        list(df.columns),
-        ["Zweck", "Zweck/Taetigkeit", "Zweck/Tätigkeit"],
-        default="Zweck",
-    )
-
-    if not name_column:
-        raise typer.BadParameter("Could not detect organization name column in input CSV.")
-
-    console.print(f"Evaluating {len(active_df)} organizations...")
-    try:
-        results = evaluate_batch(
-            active_df.to_dict("records"),
-            settings,
-            name_column=name_column,
-            location_column=location_column,
-            purpose_column=purpose_column,
-        )
-    except ExternalApiAccessError as e:
-        print_warning(
-            "Evaluate stopped early due to external API access issue. "
-            "Completed and partial evaluation files are kept."
-        )
-        print_error(f"{e.provider}: {e.reason}")
-        raise typer.Exit(code=1)
-
-    errors = sum(1 for r in results if r.get("_error"))
-    print_summary(
-        "Evaluate Results",
-        [
-            ("Evaluated", len(results)),
-            ("Errors", errors),
-            ("Excluded from pipeline", int(excluded_mask.sum())),
-        ],
-    )
-
-
-@app.command()
-def report() -> None:
-    """Step 4: Generate the final summary report.
-
-    Implementation maturity note:
-    Reporting is currently a first-shot implementation and should be validated
-    against the current evaluation artifact shape before final use.
-    """
-    from benefind.report import generate_report
-
-    settings = load_settings()
-    _setup_logging(settings.log_level)
-
-    paths = generate_report(settings)
-    if paths:
-        print_summary("Report Generated", [(name, str(path)) for name, path in paths.items()])
-    else:
-        console.print("[yellow]No evaluations found. Run the pipeline first.[/yellow]")
-
-
-@app.command()
 def subset(
     input_file: Path | None = typer.Option(
         None,
@@ -2993,12 +2885,12 @@ def export(
     only: str | None = typer.Option(
         None,
         "--only",
-        help="Export only selected target(s): raw, parsed, filtered, orgs, reports",
+        help="Export only selected target(s): raw, parsed, filtered, orgs",
     ),
     exclude: str | None = typer.Option(
         None,
         "--except",
-        help="Skip selected target(s): raw, parsed, filtered, orgs, reports",
+        help="Skip selected target(s): raw, parsed, filtered, orgs",
     ),
     no_interaction: bool = typer.Option(
         False,
@@ -3012,8 +2904,8 @@ def export(
     settings = load_settings()
     _setup_logging(settings.log_level)
 
-    valid_targets = {"raw", "parsed", "filtered", "orgs", "reports"}
-    ordered_targets = ["raw", "parsed", "filtered", "orgs", "reports"]
+    valid_targets = {"raw", "parsed", "filtered", "orgs"}
+    ordered_targets = ["raw", "parsed", "filtered", "orgs"]
     interactive = (not no_interaction) and sys.stdin.isatty() and sys.stdout.isatty()
 
     only_targets = _parse_target_list(only) if only else set()
@@ -3149,12 +3041,12 @@ def delete_cmd(
     only: str | None = typer.Option(
         None,
         "--only",
-        help="Delete only selected target(s): raw, parsed, filtered, orgs, reports, pdf",
+        help="Delete only selected target(s): raw, parsed, filtered, orgs, pdf",
     ),
     exclude: str | None = typer.Option(
         None,
         "--except",
-        help="Keep selected target(s): pdf, raw, parsed, filtered, orgs, reports",
+        help="Keep selected target(s): pdf, raw, parsed, filtered, orgs",
     ),
     yes: bool = typer.Option(
         False,
@@ -3166,8 +3058,8 @@ def delete_cmd(
     """Delete generated data safely with include/exclude targeting."""
     from benefind.config import DATA_DIR
 
-    valid_targets = {"raw", "parsed", "filtered", "orgs", "reports", "pdf"}
-    default_targets = {"raw", "parsed", "filtered", "orgs", "reports"}
+    valid_targets = {"raw", "parsed", "filtered", "orgs", "pdf"}
+    default_targets = {"raw", "parsed", "filtered", "orgs"}
 
     only_targets = _parse_target_list(only) if only else set()
     exclude_targets = _parse_target_list(exclude) if exclude else set()
@@ -3192,7 +3084,6 @@ def delete_cmd(
     parsed_dir = DATA_DIR / "parsed"
     filtered_dir = DATA_DIR / "filtered"
     orgs_dir = DATA_DIR / "orgs"
-    reports_dir = DATA_DIR / "reports"
 
     if not yes and sys.stdin.isatty() and sys.stdout.isatty():
         target_label = ", ".join(sorted(targets))
@@ -3232,11 +3123,6 @@ def delete_cmd(
 
     if "orgs" in targets:
         files, dirs = _clear_directory(orgs_dir)
-        removed_files += files
-        removed_dirs += dirs
-
-    if "reports" in targets:
-        files, dirs = _clear_directory(reports_dir)
         removed_files += files
         removed_dirs += dirs
 
@@ -3329,7 +3215,7 @@ def review_url_normalization_cmd(
 
 @app.command()
 def run() -> None:
-    """Run full pipeline steps from parse to report."""
+    """Run full pipeline steps from parse to scrape-clean."""
     settings = load_settings()
     _setup_logging(settings.log_level)
 
@@ -3340,10 +3226,13 @@ def run() -> None:
             "  [cyan]benefind parse[/cyan]\n"
             "  [cyan]benefind filter[/cyan]\n"
             "  [cyan]benefind discover[/cyan]\n"
+            "  [cyan]benefind normalize-urls[/cyan]\n"
+            "  [cyan]benefind review-url-normalization[/cyan]\n"
             "  [cyan]benefind prepare-scraping[/cyan]\n"
+            "  [cyan]benefind review scrape-readiness[/cyan]\n"
             "  [cyan]benefind scrape[/cyan]\n"
-            "  [cyan]benefind evaluate[/cyan]\n"
-            "  [cyan]benefind report[/cyan]",
+            "  [cyan]benefind review scrape-quality[/cyan]\n"
+            "  [cyan]benefind scrape-clean[/cyan]",
             "benefind pipeline",
         )
     )

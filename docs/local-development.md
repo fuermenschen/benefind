@@ -23,7 +23,7 @@ cp .env.example .env
 # Edit .env and add:
 # - BRAVE_API_KEY (discover)
 # - FIRECRAWL_API_KEY (discover fallback, optional)
-# - OPENAI_API_KEY (evaluate)
+# - OPENAI_API_KEY (discover LLM verification)
 ```
 
 ## Notes

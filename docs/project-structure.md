@@ -11,8 +11,7 @@ benefind/
 │   ├── raw/                 # Downloaded PDF
 │   ├── parsed/              # Extracted CSV
 │   ├── filtered/            # Location-filtered results + website decisions
-│   ├── orgs/                # Per-org scraped content & evaluations
-│   └── reports/             # Final summary reports
+│   └── orgs/                # Per-org scrape, clean, and prep artifacts
 ├── docs/                    # Project docs
 ├── scripts/
 │   └── check_normalization.py # URL normalization audit helper
@@ -23,9 +22,9 @@ benefind/
     ├── filter_locations.py  # Location filtering
     ├── discover_websites.py # Website discovery
     ├── scrape.py            # Web scraping
-    ├── evaluate.py          # LLM evaluation
+    ├── scrape_clean.py      # Post-scrape segment dedup cleaning
     ├── review.py            # Interactive manual review flows
-    └── report.py            # Report generation
+    └── external_api.py      # API access + fail-fast classification helpers
 ```
 
 Common generated files in `data/filtered/`:
