@@ -180,6 +180,15 @@ def _text_or_empty(value: object) -> str:
     return str(value or "").strip()
 
 
+def _muted_preview(value: object, *, limit: int = 220) -> str:
+    text = _text_or_empty(value)
+    if not text:
+        return f"[{C_MUTED}]-[/{C_MUTED}]"
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "..."
+    return f"[{C_MUTED}]{text}[/{C_MUTED}]"
+
+
 def _decision_key(name: str, location: str) -> str:
     return f"{(name or '').strip().lower()}|{(location or '').strip().lower()}"
 
@@ -1377,6 +1386,59 @@ def _website_actions_panel() -> None:
     console.print(make_panel(make_actions_table(_WEBSITE_ACTIONS), "Actions"))
 
 
+def _discover_verify_context_panel(row: pd.Series) -> None:
+    llm_belongs_raw = _text_or_empty(row.get("_discover_verify_llm_belongs", ""))
+    if llm_belongs_raw.lower() in {"true", "1", "yes", "y"}:
+        llm_belongs = f"[{C_SCORE_HIGH}]yes[/{C_SCORE_HIGH}]"
+    elif llm_belongs_raw.lower() in {"false", "0", "no", "n"}:
+        llm_belongs = f"[{C_SCORE_LOW}]no[/{C_SCORE_LOW}]"
+    else:
+        llm_belongs = f"[{C_MUTED}]-[/{C_MUTED}]"
+
+    rows: list[tuple[str, str]] = [
+        ("Status", _text_or_empty(row.get("_discover_verify_status", "")) or "-"),
+        (
+            "Stage",
+            _muted_preview(_text_or_empty(row.get("_discover_verify_stage", "")), limit=80),
+        ),
+        (
+            "Confidence",
+            fmt_confidence(_text_or_empty(row.get("_discover_verify_confidence", ""))),
+        ),
+        ("Score", fmt_score(_text_or_empty(row.get("_discover_verify_score", ""))),
+        ),
+        ("LLM belongs", llm_belongs),
+        (
+            "LLM score",
+            fmt_score(_text_or_empty(row.get("_discover_verify_llm_score", ""))),
+        ),
+        (
+            "Rule name match",
+            _muted_preview(
+                _text_or_empty(row.get("_discover_verify_rule_name_match", "")),
+                limit=8,
+            ),
+        ),
+        (
+            "Rule location match",
+            _muted_preview(
+                _text_or_empty(row.get("_discover_verify_rule_location_match", "")),
+                limit=8,
+            ),
+        ),
+        (
+            "Reason",
+            _muted_preview(_text_or_empty(row.get("_discover_verify_reason", ""))),
+        ),
+    ]
+
+    evidence = _text_or_empty(row.get("_discover_verify_llm_evidence", ""))
+    if evidence:
+        rows.append(("Evidence", _muted_preview(evidence)))
+
+    console.print(make_panel(make_kv_table(rows), "Verify Context"))
+
+
 # ---------------------------------------------------------------------------
 # Location review panels
 # ---------------------------------------------------------------------------
@@ -1968,8 +2030,6 @@ def review_discover_mismatches() -> dict[str, int]:
             org_name = str(row.get(name_col, "Unknown") or "Unknown") if name_col else "Unknown"
             org_location = str(row.get(location_col, "") or "").strip() if location_col else ""
             website_url = str(row.get("_website_url", "") or "").strip()
-            verify_reason = str(row.get("_discover_verify_reason", "") or "").strip()
-
             clear()
             console.print(progress.as_panel("Discover Mismatch Review"))
             _website_org_panel(org_name, org_location, position, len(queue_indices))
@@ -1982,9 +2042,7 @@ def review_discover_mismatches() -> dict[str, int]:
                 "",
                 "",
             )
-            if verify_reason:
-                reason_text = f"[{C_MUTED}]{verify_reason}[/{C_MUTED}]"
-                console.print(make_panel(reason_text, "Verify Reason"))
+            _discover_verify_context_panel(row)
 
             actions_panel = make_actions_table(
                 [
