@@ -127,6 +127,7 @@ id = "q01_target_focus"
 enabled = true
 description = "Target focus + directness classification"
 order = 10
+ask_max_attempts = 2
 
 [classify.source]
 kind = "pages_cleaned"
@@ -137,9 +138,11 @@ min_snippet_chars = 0
 [classify.policy]
 
 [[classify.policy.rules]]
+id = "q01_auto_exclude_non_human"
 action = "auto_exclude"
 priority = 10
 mode = "all"
+review_reason = "Confident non-human primary focus with sufficient evidence."
 conditions = [
   { field = "primary_focus", op = "in", value = [
     "environment",
@@ -155,9 +158,11 @@ conditions = [
 ]
 
 [[classify.policy.rules]]
+id = "q01_auto_accept_human_direct"
 action = "auto_accept"
 priority = 20
 mode = "all"
+review_reason = "Confident human direct-service organization with supporting evidence."
 conditions = [
   { field = "primary_focus", op = "eq", value = "humans" },
   { field = "service_mode", op = "eq", value = "direct_service" },
@@ -167,26 +172,32 @@ conditions = [
 ]
 
 [[classify.policy.rules]]
+id = "q01_review_education"
 action = "review_needed"
 priority = 25
 mode = "all"
+review_reason = "Education focus requires manual verification."
 conditions = [
   { field = "primary_focus", op = "eq", value = "education" },
 ]
 
 [[classify.policy.rules]]
+id = "q01_review_humans_secondary"
 action = "review_needed"
 priority = 26
 mode = "all"
+review_reason = "Humans appear as secondary focus under a non-human primary category."
 conditions = [
   { field = "primary_focus", op = "not_in", value = ["humans", "unknown", "mixed", "other", "education"] },
   { field = "secondary_focuses", op = "contains", value = "humans" },
 ]
 
 [[classify.policy.rules]]
+id = "q01_review_sensitive_subgroups"
 action = "review_needed"
 priority = 27
 mode = "all"
+review_reason = "Sensitive subgroup labels under non-human primary focus need review."
 conditions = [
   { field = "primary_focus", op = "not_in", value = ["humans", "unknown", "mixed", "other", "education"] },
   { field = "subgroup_labels", op = "intersects", value = [
@@ -203,36 +214,145 @@ conditions = [
 ]
 
 [[classify.policy.rules]]
+id = "q01_review_conflict_confidence"
 action = "review_needed"
 priority = 28
 mode = "all"
+review_reason = "Primary focus confidence and overall confidence are inconsistent."
 conditions = [
   { field = "primary_focus_confidence", op = "gte", value = 0.8 },
   { field = "confidence", op = "lte", value = 0.6 },
 ]
 
 [[classify.policy.rules]]
+id = "q01_review_policy_religion"
 action = "review_needed"
 priority = 29
 mode = "all"
+review_reason = "Advocacy/religion focus is routed to manual review despite high confidence."
 conditions = [
   { field = "primary_focus", op = "in", value = ["advocacy_policy", "religion_faith"] },
   { field = "primary_focus_confidence", op = "gte", value = 0.75 },
 ]
 
 [[classify.policy.rules]]
+id = "q01_review_ambiguous"
 action = "review_needed"
 priority = 30
 mode = "any"
+review_reason = "Ambiguous or indirect classification requires manual review."
 conditions = [
   { field = "primary_focus", op = "in", value = ["unknown", "mixed", "other"] },
   { field = "service_mode", op = "in", value = ["unknown", "mixed", "indirect_only"] },
 ]
 
 [[classify.policy.rules]]
+id = "q01_review_fallback"
 action = "review_needed"
 priority = 40
 mode = "all"
+review_reason = "Fallback routing to manual review."
 conditions = [
   { field = "confidence", op = "gte", value = 0.0 },
 ]
+
+[classify.output]
+strict_output_keys = true
+
+[[classify.output.fields]]
+key = "primary_focus"
+kind = "string"
+lowercase = true
+allowed = [
+  "humans",
+  "environment",
+  "animals",
+  "education",
+  "arts_culture",
+  "religion_faith",
+  "advocacy_policy",
+  "infrastructure_community",
+  "funding_grantmaking",
+  "other",
+  "mixed",
+  "unknown",
+]
+
+[[classify.output.fields]]
+key = "primary_focus_confidence"
+kind = "number"
+min = 0.0
+max = 1.0
+
+[[classify.output.fields]]
+key = "secondary_focuses"
+kind = "string_list"
+lowercase = true
+max_items = 3
+unique_casefold = true
+allowed = [
+  "humans",
+  "environment",
+  "animals",
+  "education",
+  "arts_culture",
+  "religion_faith",
+  "advocacy_policy",
+  "infrastructure_community",
+  "funding_grantmaking",
+]
+
+[[classify.output.fields]]
+key = "subgroup_labels"
+kind = "string_list"
+lowercase = true
+max_items = 5
+unique_casefold = true
+
+[[classify.output.fields]]
+key = "service_mode"
+kind = "string"
+lowercase = true
+allowed = ["direct_service", "indirect_only", "mixed", "unknown"]
+
+[[classify.output.fields]]
+key = "confidence"
+kind = "number"
+min = 0.0
+max = 1.0
+
+[[classify.output.fields]]
+key = "evidence"
+kind = "object_list"
+max_items = 4
+object_item_keys = ["snippet_id", "quote"]
+
+[[classify.output.fields]]
+key = "reason"
+kind = "string"
+
+[classify.review]
+
+[[classify.review.fields]]
+label = "Primary focus"
+field = "primary_focus"
+confidence_field = "primary_focus_confidence"
+
+[[classify.review.fields]]
+label = "Service mode"
+field = "service_mode"
+confidence_field = "confidence"
+
+[[classify.review.fields]]
+label = "Secondary"
+field = "secondary_focuses"
+format = "list"
+
+[[classify.review.fields]]
+label = "Subgroups"
+field = "subgroup_labels"
+format = "list"
+
+[[classify.review.fields]]
+label = "Reason"
+field = "reason"

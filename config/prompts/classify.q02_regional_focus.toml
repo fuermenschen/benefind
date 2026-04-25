@@ -1,0 +1,227 @@
+[prompt]
+id = "classify.q02_regional_focus"
+description = "Conservative evidence-based classification of geographic and operational scope"
+template = """
+Classify the geographic reach and operational scope of one organization based ONLY on the provided snippets and purpose text.
+Scope refers to where the organization executes its actual work or where its primary beneficiaries are located, NOT just where its office is registered.
+
+Return exactly one valid JSON object. No markdown, no prose.
+
+Required keys:
+- scope
+- extracted_locations
+- explicit_keywords
+- evidence
+- reason
+- scope_confidence
+
+Output shape:
+{{
+	"scope": "...",
+	"extracted_locations": [],
+	"explicit_keywords": [],
+	"evidence": [],
+	"reason": "...",
+	"scope_confidence": 0.0
+}}
+
+Organization:
+- name: {org_name}
+- hq_location: {org_location} (Note: This town is within Bezirk Winterthur / Canton of Zurich)
+- verified_purpose: {verified_purpose}
+
+Allowed scope values (choose exactly one string):
+- local: Work/beneficiaries are strictly limited to the hq_location.
+- regional: Work/beneficiaries cover multiple towns in Bezirk Winterthur, or the broader Canton of Zurich.
+- national: Work/beneficiaries cover all of Switzerland or multiple distinct cantons.
+- national_regional_focus: The organization is explicitly presented as a local chapter/branch (e.g., "Sektion Winterthur") of a larger national/international umbrella.
+- international: Work/beneficiaries are located outside of Switzerland (e.g., development aid, global environment).
+- unknown: Insufficient evidence to determine scope.
+
+extracted_locations:
+- Array of up to 5 specific towns, regions, or countries mentioned in the text.
+- If none are found, use an empty array.
+
+explicit_keywords:
+- Array of exact geographic scope words found (e.g., "lokal", "regional", "schweizweit", "kantonal", "weltweit", "international").
+- If none are found, use an empty array.
+
+confidence calibration (scope_confidence):
+- Number from 0.0 to 1.0.
+- 0.8 to 1.0: Explicit keywords found OR specific locations clearly define the boundary, usually backed by at least 2 quotes. One exceptionally clear statutory/purpose quote may be sufficient.
+- 0.6 to 0.79: Plausible scope inferred from context or a single strong quote.
+- below 0.6: Vague evidence, conflicting locations, or reliance purely on the organization's name without operational proof.
+
+evidence:
+- Array with 1 to 4 items when scope_confidence is 0.6 or higher.
+- Empty array allowed only when scope_confidence is below 0.6.
+- Each item must be an object: {{"snippet_id": "...", "quote": "..."}}
+- `quote` MUST be a short, verbatim extract from the snippets or verified_purpose.
+- If quoting verified_purpose, use snippet_id `__verified_purpose`.
+
+reason:
+- One short sentence that states the decisive signal (keywords, locations, and/or chapter affiliation) for the selected scope.
+
+Decision Rules:
+1. "Fundraise Here, Spend There": If an organization is located in {org_location} but clearly states its projects/beneficiaries are in another country (e.g., building schools in Africa), the scope is `international`.
+2. Purpose Priority: If `verified_purpose` contains clear geographic limits (e.g., "Zweck: Unterstützung von Familien in Winterthur"), prioritize this over vague website marketing. If `verified_purpose` is empty/missing, ignore it.
+3. The Anchor: If the text ONLY mentions {org_location} and no other places or scope keywords, choose `local` only when operational/beneficiary activity is actually indicated; otherwise choose `unknown`.
+4. Do not assume `national` or `international` just because a website uses multiple languages, a .ch/.com domain, or offers online donations.
+5. If the evidence strongly contradicts itself without clarification, lower confidence and choose `unknown`.
+6. Use `national_regional_focus` only with explicit chapter/section evidence (e.g., "Sektion", "Regionalgruppe", "Ortsgruppe", or a direct umbrella affiliation statement). Do not infer it from naming style alone.
+7. Return only valid JSON.
+
+Evidence snippets:
+{evidence_snippets}
+"""
+
+[prompt.placeholders]
+org_name = "Organization name"
+org_location = "Organization location (or '-')"
+verified_purpose = "Verified purpose text (or '-')"
+evidence_snippets = "Prepared snippet list with snippet_id and text"
+
+[prompt.response]
+format = "json_object"
+required_keys = ["scope", "extracted_locations", "explicit_keywords", "evidence", "reason", "scope_confidence"]
+
+[classify]
+id = "q02_regional_focus"
+enabled = true
+description = "Geographic scope classification"
+order = 20
+ask_max_attempts = 2
+
+[classify.source]
+kind = "pages_cleaned"
+max_snippets = 18
+max_snippet_chars = 1500
+max_total_snippet_chars = 10000
+min_snippet_chars = 100
+
+[classify.policy]
+
+[[classify.policy.rules]]
+id = "q02_auto_accept_local_regional"
+action = "auto_accept"
+priority = 10
+mode = "all"
+review_reason = "Confident local/regional scope with sufficient evidence."
+conditions = [
+  { field = "scope", op = "in", value = ["local", "regional"] },
+  { field = "scope_confidence", op = "gte", value = 0.75 },
+  { field = "evidence", op = "len_gte", value = 2 },
+]
+
+[[classify.policy.rules]]
+id = "q02_auto_exclude_national_international"
+action = "auto_exclude"
+priority = 20
+mode = "all"
+review_reason = "Confident national/international scope with sufficient evidence."
+conditions = [
+  { field = "scope", op = "in", value = ["national", "international"] },
+  { field = "scope_confidence", op = "gte", value = 0.75 },
+  { field = "evidence", op = "len_gte", value = 2 },
+]
+
+[[classify.policy.rules]]
+id = "q02_review_national_regional_focus"
+action = "review_needed"
+priority = 25
+mode = "all"
+review_reason = "Chapter-style national/regional affiliation requires manual review."
+conditions = [
+  { field = "scope", op = "eq", value = "national_regional_focus" },
+]
+
+[[classify.policy.rules]]
+id = "q02_review_missing_evidence"
+action = "review_needed"
+priority = 30
+mode = "all"
+review_reason = "High confidence without evidence requires manual review."
+conditions = [
+  { field = "scope_confidence", op = "gte", value = 0.8 },
+  { field = "evidence", op = "len_eq", value = 0 },
+]
+
+[[classify.policy.rules]]
+id = "q02_review_low_conf_conflict"
+action = "review_needed"
+priority = 31
+mode = "all"
+review_reason = "Low confidence with non-unknown scope requires manual review."
+conditions = [
+  { field = "scope_confidence", op = "lte", value = 0.6 },
+  { field = "scope", op = "not_in", value = ["unknown"] },
+]
+
+[[classify.policy.rules]]
+id = "q02_review_fallback"
+action = "review_needed"
+priority = 40
+mode = "all"
+review_reason = "Fallback routing to manual review."
+conditions = [
+  { field = "scope_confidence", op = "gte", value = 0.0 },
+]
+
+[classify.output]
+strict_output_keys = true
+
+[[classify.output.fields]]
+key = "scope"
+kind = "string"
+lowercase = true
+allowed = ["local", "regional", "national", "national_regional_focus", "international", "unknown"]
+
+[[classify.output.fields]]
+key = "extracted_locations"
+kind = "string_list"
+max_items = 5
+unique_casefold = true
+
+[[classify.output.fields]]
+key = "explicit_keywords"
+kind = "string_list"
+lowercase = true
+max_items = 8
+unique_casefold = true
+
+[[classify.output.fields]]
+key = "evidence"
+kind = "object_list"
+max_items = 4
+object_item_keys = ["snippet_id", "quote"]
+
+[[classify.output.fields]]
+key = "reason"
+kind = "string"
+
+[[classify.output.fields]]
+key = "scope_confidence"
+kind = "number"
+min = 0.0
+max = 1.0
+
+[classify.review]
+
+[[classify.review.fields]]
+label = "Scope"
+field = "scope"
+confidence_field = "scope_confidence"
+
+[[classify.review.fields]]
+label = "Extracted locations"
+field = "extracted_locations"
+format = "list"
+
+[[classify.review.fields]]
+label = "Explicit keywords"
+field = "explicit_keywords"
+format = "list"
+
+[[classify.review.fields]]
+label = "Reason"
+field = "reason"

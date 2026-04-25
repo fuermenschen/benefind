@@ -37,6 +37,7 @@ from benefind.external_api import ExternalApiAccessError, classify_openai_access
 from benefind.scrape_clean import load_latest_scrape_clean_summary
 
 STATUS_WAITING_FOR_CLEAN_TEXT = "waiting_for_clean_text"
+VERIFIED_PURPOSE_SNIPPET_ID = "__verified_purpose"
 
 
 @dataclass(slots=True)
@@ -44,6 +45,7 @@ class QuestionSourceConfig:
     kind: str = "pages_cleaned"
     max_snippets: int = 18
     max_snippet_chars: int = 800
+    max_total_snippet_chars: int | None = None
     min_snippet_chars: int = 0
     selection_mode: str = "file_order"
     keyword_priority_terms: list[str] = field(default_factory=list)
@@ -60,10 +62,33 @@ class Rule:
 
 @dataclass(slots=True)
 class PolicyRule:
+    rule_id: str
     action: str
     priority: int
     mode: str
     conditions: list[Rule]
+    review_reason: str
+
+
+@dataclass(slots=True)
+class OutputFieldConfig:
+    key: str
+    kind: str
+    lowercase: bool = False
+    min_value: float | None = None
+    max_value: float | None = None
+    max_items: int | None = None
+    unique_casefold: bool = False
+    allowed: list[str] = field(default_factory=list)
+    object_item_keys: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ReviewFieldConfig:
+    label: str
+    field: str
+    format: str = "auto"
+    confidence_field: str = ""
 
 
 @dataclass(slots=True)
@@ -75,6 +100,10 @@ class ClassifyQuestion:
     description: str
     source: QuestionSourceConfig
     policy_rules: list[PolicyRule]
+    output_fields: list[OutputFieldConfig]
+    strict_output_keys: bool
+    ask_max_attempts: int
+    review_fields: list[ReviewFieldConfig]
     source_path: str
     fingerprint: str
 
@@ -85,6 +114,7 @@ class AskResult:
     raw_response: str
     prompt: str
     route: str
+    route_reason: str
     error: str
 
 
@@ -94,6 +124,7 @@ def _slug(value: str) -> str:
 
 
 def _parse_rule(raw: dict, *, fallback_priority: int) -> PolicyRule:
+    rule_id = str(raw.get("id", "") or "").strip() or f"rule_{fallback_priority}"
     action = str(raw.get("action", "") or "").strip().lower()
     if action not in {"auto_accept", "auto_exclude", "review_needed"}:
         raise ValueError(f"Invalid classify policy action: {action!r}")
@@ -118,7 +149,60 @@ def _parse_rule(raw: dict, *, fallback_priority: int) -> PolicyRule:
 
     if not conditions:
         raise ValueError("Classify policy rule has no usable conditions")
-    return PolicyRule(action=action, priority=priority, mode=mode, conditions=conditions)
+    return PolicyRule(
+        rule_id=rule_id,
+        action=action,
+        priority=priority,
+        mode=mode,
+        conditions=conditions,
+        review_reason=str(raw.get("review_reason", "") or "").strip(),
+    )
+
+
+def _parse_output_field(raw: dict) -> OutputFieldConfig:
+    key = str(raw.get("key", "") or "").strip()
+    kind = str(raw.get("kind", "") or "").strip().lower()
+    if not key:
+        raise ValueError("Classify output field requires key")
+    if kind not in {"string", "number", "string_list", "object_list"}:
+        raise ValueError(f"Classify output field '{key}' has invalid kind: {kind!r}")
+    min_value = raw.get("min")
+    max_value = raw.get("max")
+    max_items = raw.get("max_items")
+    allowed_raw = raw.get("allowed", [])
+    if not isinstance(allowed_raw, list):
+        raise ValueError(f"Classify output field '{key}' requires allowed to be a list")
+    object_item_keys_raw = raw.get("object_item_keys", [])
+    if not isinstance(object_item_keys_raw, list):
+        raise ValueError(
+            f"Classify output field '{key}' requires object_item_keys to be a list"
+        )
+    return OutputFieldConfig(
+        key=key,
+        kind=kind,
+        lowercase=bool(raw.get("lowercase", False)),
+        min_value=float(min_value) if min_value is not None else None,
+        max_value=float(max_value) if max_value is not None else None,
+        max_items=int(max_items) if max_items is not None else None,
+        unique_casefold=bool(raw.get("unique_casefold", False)),
+        allowed=[str(item).strip() for item in allowed_raw if str(item).strip()],
+        object_item_keys=[
+            str(item).strip() for item in object_item_keys_raw if str(item).strip()
+        ],
+    )
+
+
+def _parse_review_field(raw: dict) -> ReviewFieldConfig:
+    label = str(raw.get("label", "") or "").strip()
+    field = str(raw.get("field", "") or "").strip()
+    if not label or not field:
+        raise ValueError("Classify review field requires label and field")
+    return ReviewFieldConfig(
+        label=label,
+        field=field,
+        format=str(raw.get("format", "auto") or "auto").strip().lower(),
+        confidence_field=str(raw.get("confidence_field", "") or "").strip(),
+    )
 
 
 def load_classify_questions(config_dir: Path | None = None) -> list[ClassifyQuestion]:
@@ -162,9 +246,33 @@ def load_classify_questions(config_dir: Path | None = None) -> list[ClassifyQues
             if isinstance(classify_raw.get("policy", {}), dict)
             else {}
         )
+        output_raw = (
+            classify_raw.get("output", {})
+            if isinstance(classify_raw.get("output", {}), dict)
+            else {}
+        )
+        review_raw = (
+            classify_raw.get("review", {})
+            if isinstance(classify_raw.get("review", {}), dict)
+            else {}
+        )
         rules_raw_value = policy_raw.get("rules", [])
         rules_raw = rules_raw_value if isinstance(rules_raw_value, list) else []
         rules = [_parse_rule(raw, fallback_priority=index) for index, raw in enumerate(rules_raw)]
+        output_fields_raw_value = output_raw.get("fields", [])
+        output_fields_raw = (
+            output_fields_raw_value if isinstance(output_fields_raw_value, list) else []
+        )
+        output_fields = [
+            _parse_output_field(raw) for raw in output_fields_raw if isinstance(raw, dict)
+        ]
+        review_fields_raw_value = review_raw.get("fields", [])
+        review_fields_raw = (
+            review_fields_raw_value if isinstance(review_fields_raw_value, list) else []
+        )
+        review_fields = [
+            _parse_review_field(raw) for raw in review_fields_raw if isinstance(raw, dict)
+        ]
         terms_raw = keyword_priority_raw.get("terms", [])
         if not isinstance(terms_raw, list):
             raise ValueError(
@@ -175,6 +283,11 @@ def load_classify_questions(config_dir: Path | None = None) -> list[ClassifyQues
             kind=str(source_raw.get("kind", "pages_cleaned") or "pages_cleaned").strip(),
             max_snippets=int(source_raw.get("max_snippets", 18) or 18),
             max_snippet_chars=int(source_raw.get("max_snippet_chars", 800) or 800),
+            max_total_snippet_chars=(
+                int(source_raw.get("max_total_snippet_chars"))
+                if source_raw.get("max_total_snippet_chars") not in {None, ""}
+                else None
+            ),
             min_snippet_chars=int(source_raw.get("min_snippet_chars", 0) or 0),
             selection_mode=str(source_raw.get("selection_mode", "file_order") or "file_order")
             .strip()
@@ -215,6 +328,29 @@ def load_classify_questions(config_dir: Path | None = None) -> list[ClassifyQues
                 f"Classify question '{qid}' has invalid source.keyword_priority.fill_mode: "
                 f"{source.keyword_priority_fill_mode!r}"
             )
+        if source.max_total_snippet_chars is not None and source.max_total_snippet_chars <= 0:
+            raise ValueError(
+                f"Classify question '{qid}' has invalid source.max_total_snippet_chars: "
+                f"{source.max_total_snippet_chars!r}"
+            )
+        if not output_fields:
+            raise ValueError(f"Classify question '{qid}' requires classify.output.fields")
+        output_keys = [field.key for field in output_fields]
+        if len(set(output_keys)) != len(output_keys):
+            raise ValueError(f"Classify question '{qid}' has duplicate output field keys")
+
+        required_keys_raw = prompt_raw.get("response", {}).get("required_keys", [])
+        if not isinstance(required_keys_raw, list):
+            raise ValueError(
+                f"Classify question '{qid}' prompt.response.required_keys must be a list"
+            )
+        required_keys = [str(item).strip() for item in required_keys_raw if str(item).strip()]
+        missing_output_defs = sorted(set(required_keys) - set(output_keys))
+        if missing_output_defs:
+            raise ValueError(
+                f"Classify question '{qid}' missing classify.output.fields definitions for: "
+                f"{', '.join(missing_output_defs)}"
+            )
 
         questions.append(
             ClassifyQuestion(
@@ -225,6 +361,14 @@ def load_classify_questions(config_dir: Path | None = None) -> list[ClassifyQues
                 description=str(classify_raw.get("description", "") or "").strip(),
                 source=source,
                 policy_rules=rules,
+                output_fields=output_fields,
+                strict_output_keys=bool(output_raw.get("strict_output_keys", False)),
+                ask_max_attempts=(
+                    int(classify_raw.get("ask_max_attempts"))
+                    if classify_raw.get("ask_max_attempts") not in {None, ""}
+                    else 2
+                ),
+                review_fields=review_fields,
                 source_path=str(prompt_path),
                 fingerprint=fingerprint,
             )
@@ -235,6 +379,8 @@ def load_classify_questions(config_dir: Path | None = None) -> list[ClassifyQues
             raise ValueError(f"Classify question '{question.id}' has no prompt.id")
         if not question.policy_rules:
             raise ValueError(f"Classify question '{question.id}' has no policy rules")
+        if question.ask_max_attempts <= 0:
+            raise ValueError(f"Classify question '{question.id}' has invalid ask_max_attempts")
 
     questions.sort(key=lambda item: item.order)
     return [item for item in questions if item.enabled]
@@ -612,15 +758,29 @@ def collect_evidence_snippets(org_id: str, question: ClassifyQuestion) -> list[d
         selected = sorted(candidates, key=lambda row: int(row.get("_file_order", 0) or 0))
 
     snippets: list[dict[str, str]] = []
+    total_chars = 0
+    max_total = question.source.max_total_snippet_chars
     for row in selected:
         if len(snippets) >= question.source.max_snippets:
             break
+        text = str(row.get("text", "") or "").strip()
+        if not text:
+            continue
+        if max_total is not None:
+            remaining = max_total - total_chars
+            if remaining <= 0:
+                break
+            if len(text) > remaining:
+                text = text[:remaining].strip()
+                if not text:
+                    break
         snippets.append(
             {
                 "snippet_id": str(row.get("snippet_id", "") or "").strip(),
-                "text": str(row.get("text", "") or "").strip(),
+                "text": text,
             }
         )
+        total_chars += len(text)
     return snippets
 
 
@@ -656,89 +816,134 @@ def _extract_json_object(text: str) -> dict:
         return {}
 
 
-def _unique_text_list(values: object, *, limit: int) -> list[str]:
+def _normalize_text_list(
+    values: object,
+    *,
+    max_items: int | None,
+    lowercase: bool,
+    unique_casefold: bool,
+) -> list[str]:
     if not isinstance(values, list):
-        return []
+        raise ValueError("Expected array value")
     output: list[str] = []
     seen: set[str] = set()
     for value in values:
         text = str(value or "").strip()
         if not text:
             continue
-        if text.lower() in seen:
+        if lowercase:
+            text = text.lower()
+        key = text.casefold() if unique_casefold else text
+        if unique_casefold and key in seen:
             continue
-        seen.add(text.lower())
+        seen.add(key)
         output.append(text)
-        if len(output) >= limit:
+        if max_items is not None and len(output) >= max_items:
             break
     return output
 
 
-def normalize_payload(payload: dict, *, allowed_snippet_ids: set[str]) -> dict:
-    primary_focus = str(payload.get("primary_focus", "") or "").strip().lower()
-    service_mode = str(payload.get("service_mode", "") or "").strip().lower()
-    reason = str(payload.get("reason", "") or "").strip()
-    try:
-        confidence = float(payload.get("confidence", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    confidence = max(0.0, min(1.0, confidence))
-
-    try:
-        primary_focus_confidence = float(payload.get("primary_focus_confidence", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        primary_focus_confidence = 0.0
-    primary_focus_confidence = max(0.0, min(1.0, primary_focus_confidence))
-
-    secondary = [
-        value.lower()
-        for value in _unique_text_list(payload.get("secondary_focuses"), limit=3)
-    ]
-    subgroups = [
-        value.lower() for value in _unique_text_list(payload.get("subgroup_labels"), limit=5)
-    ]
-
-    evidence_output: list[dict[str, str]] = []
-    if isinstance(payload.get("evidence"), list):
-        for item in payload.get("evidence"):
-            if not isinstance(item, dict):
-                continue
-            snippet_id = str(item.get("snippet_id", "") or "").strip()
-            quote = str(item.get("quote", "") or "").strip()
-            if not snippet_id or not quote:
-                continue
-            if snippet_id not in allowed_snippet_ids:
-                continue
-            evidence_output.append({"snippet_id": snippet_id, "quote": quote})
-            if len(evidence_output) >= 4:
-                break
-
-    return {
-        "primary_focus": primary_focus,
-        "primary_focus_confidence": primary_focus_confidence,
-        "secondary_focuses": secondary,
-        "subgroup_labels": subgroups,
-        "service_mode": service_mode,
-        "confidence": confidence,
-        "evidence": evidence_output,
-        "reason": reason,
-    }
-
-
-def validate_payload(payload: dict) -> None:
-    required_keys = {
-        "primary_focus",
-        "primary_focus_confidence",
-        "secondary_focuses",
-        "subgroup_labels",
-        "service_mode",
-        "confidence",
-        "evidence",
-        "reason",
-    }
-    missing = sorted(required_keys - set(payload.keys()))
+def validate_payload(
+    payload: dict,
+    *,
+    question: ClassifyQuestion,
+    required_keys: list[str],
+) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("LLM output must be a JSON object")
+    missing = sorted(set(required_keys) - set(payload.keys()))
     if missing:
         raise ValueError(f"Missing required keys: {', '.join(missing)}")
+    if question.strict_output_keys:
+        allowed_keys = {field.key for field in question.output_fields}
+        extras = sorted(set(payload.keys()) - allowed_keys)
+        if extras:
+            raise ValueError(f"Unexpected keys: {', '.join(extras)}")
+
+
+def normalize_payload(
+    payload: dict,
+    *,
+    question: ClassifyQuestion,
+    allowed_snippet_ids: set[str],
+) -> dict:
+    output: dict[str, object] = {}
+    for field_cfg in question.output_fields:
+        raw_value = payload.get(field_cfg.key)
+        if field_cfg.kind == "string":
+            text = str(raw_value or "").strip()
+            if field_cfg.lowercase:
+                text = text.lower()
+            if field_cfg.allowed and text not in field_cfg.allowed:
+                raise ValueError(
+                    f"Invalid value for '{field_cfg.key}': {text!r}. "
+                    f"Allowed: {field_cfg.allowed}"
+                )
+            output[field_cfg.key] = text
+            continue
+
+        if field_cfg.kind == "number":
+            try:
+                number = float(raw_value)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"Invalid numeric value for '{field_cfg.key}'") from e
+            if field_cfg.min_value is not None:
+                number = max(field_cfg.min_value, number)
+            if field_cfg.max_value is not None:
+                number = min(field_cfg.max_value, number)
+            output[field_cfg.key] = number
+            continue
+
+        if field_cfg.kind == "string_list":
+            values = _normalize_text_list(
+                raw_value,
+                max_items=field_cfg.max_items,
+                lowercase=field_cfg.lowercase,
+                unique_casefold=field_cfg.unique_casefold,
+            )
+            if field_cfg.allowed:
+                invalid = [item for item in values if item not in field_cfg.allowed]
+                if invalid:
+                    raise ValueError(
+                        f"Invalid values for '{field_cfg.key}': {invalid!r}. "
+                        f"Allowed: {field_cfg.allowed}"
+                    )
+            output[field_cfg.key] = values
+            continue
+
+        if field_cfg.kind == "object_list":
+            if not isinstance(raw_value, list):
+                raise ValueError(f"Expected array value for '{field_cfg.key}'")
+            objects: list[dict[str, str]] = []
+            for item in raw_value:
+                if not isinstance(item, dict):
+                    continue
+                if field_cfg.object_item_keys:
+                    keys = sorted(str(key).strip() for key in item.keys())
+                    expected = sorted(field_cfg.object_item_keys)
+                    if keys != expected:
+                        raise ValueError(
+                            f"Invalid object keys for '{field_cfg.key}': {keys!r}, "
+                            f"expected {expected!r}"
+                        )
+                obj: dict[str, str] = {}
+                for key in field_cfg.object_item_keys:
+                    obj[key] = str(item.get(key, "") or "").strip()
+                if "snippet_id" in obj and obj["snippet_id"] not in allowed_snippet_ids:
+                    continue
+                if "snippet_id" in obj and not obj["snippet_id"]:
+                    continue
+                if "quote" in obj and not obj["quote"]:
+                    continue
+                objects.append(obj)
+                if field_cfg.max_items is not None and len(objects) >= field_cfg.max_items:
+                    break
+            output[field_cfg.key] = objects
+            continue
+
+        raise ValueError(f"Unsupported output field kind: {field.kind!r}")
+
+    return output
 
 
 def _field_value(payload: dict, field: str) -> object:
@@ -802,7 +1007,7 @@ def _rule_match(rule: Rule, payload: dict) -> bool:
     return False
 
 
-def decide_route(payload: dict, question: ClassifyQuestion) -> str:
+def decide_route(payload: dict, question: ClassifyQuestion) -> tuple[str, str]:
     ordered_rules = sorted(question.policy_rules, key=lambda item: item.priority)
     for rule in ordered_rules:
         if rule.mode == "all":
@@ -812,16 +1017,17 @@ def decide_route(payload: dict, question: ClassifyQuestion) -> str:
         if not matched:
             continue
         if rule.action == "auto_accept":
-            return "auto_accepted"
+            return "auto_accepted", rule.review_reason or f"Matched policy rule {rule.rule_id}."
         if rule.action == "auto_exclude":
-            return "auto_excluded"
-        return "needs_review"
-    return "needs_review"
+            return "auto_excluded", rule.review_reason or f"Matched policy rule {rule.rule_id}."
+        return "needs_review", rule.review_reason or f"Matched policy rule {rule.rule_id}."
+    return "needs_review", "No policy rule matched; default manual review."
 
 
 def classify_once(
     org_name: str,
     org_location: str,
+    verified_purpose: str,
     snippets: list[dict[str, str]],
     question: ClassifyQuestion,
     settings: Settings,
@@ -830,14 +1036,22 @@ def classify_once(
     if prompt_def is None:
         raise ValueError(f"Prompt '{question.prompt_id}' is missing")
 
-    prompt = render_prompt_template(
-        prompt_def,
-        {
-            "org_name": org_name,
-            "org_location": org_location or "-",
-            "evidence_snippets": render_evidence_snippets(snippets),
-        },
-    )
+    template_values: dict[str, object] = {}
+    for placeholder in prompt_def.placeholders:
+        if placeholder == "org_name":
+            template_values[placeholder] = org_name
+        elif placeholder == "org_location":
+            template_values[placeholder] = org_location or "-"
+        elif placeholder == "verified_purpose":
+            template_values[placeholder] = verified_purpose or "-"
+        elif placeholder == "evidence_snippets":
+            template_values[placeholder] = render_evidence_snippets(snippets)
+        else:
+            raise ValueError(
+                f"Prompt '{prompt_def.id}' uses unsupported classify placeholder: {placeholder!r}"
+            )
+
+    prompt = render_prompt_template(prompt_def, template_values)
 
     try:
         from openai import OpenAI
@@ -851,36 +1065,52 @@ def classify_once(
             details="OPENAI_API_KEY is not set",
         )
 
-    try:
-        client = OpenAI()
-        response = client.responses.create(
-            model=settings.llm.model,
-            input=prompt,
-            temperature=float(settings.llm.temperature),
-            max_output_tokens=int(settings.llm.max_tokens),
-        )
-    except Exception as e:
-        access_error = classify_openai_access_error(e)
-        if access_error is not None:
-            raise access_error
-        raise ValueError(f"LLM request failed: {e}") from e
-
-    raw_response = str(getattr(response, "output_text", "") or "").strip()
-    parsed = _extract_json_object(raw_response)
-    if not parsed:
-        raise ValueError("LLM did not return a JSON object")
-
-    validate_payload(parsed)
+    required_keys = list(prompt_def.response_required_keys)
     allowed = {str(item.get("snippet_id", "")).strip() for item in snippets}
-    normalized = normalize_payload(parsed, allowed_snippet_ids=allowed)
-    route = decide_route(normalized, question)
-    return AskResult(
-        payload=normalized,
-        raw_response=raw_response,
-        prompt=prompt,
-        route=route,
-        error="",
-    )
+    if str(verified_purpose or "").strip():
+        allowed.add(VERIFIED_PURPOSE_SNIPPET_ID)
+    client = OpenAI()
+    last_error = ""
+    for attempt in range(1, question.ask_max_attempts + 1):
+        try:
+            response = client.responses.create(
+                model=settings.llm.model,
+                input=prompt,
+                temperature=float(settings.llm.temperature),
+                max_output_tokens=int(settings.llm.max_tokens),
+            )
+        except Exception as e:
+            access_error = classify_openai_access_error(e)
+            if access_error is not None:
+                raise access_error
+            raise ValueError(f"LLM request failed: {e}") from e
+
+        raw_response = str(getattr(response, "output_text", "") or "").strip()
+        parsed = _extract_json_object(raw_response)
+        if not parsed:
+            last_error = "LLM did not return a JSON object"
+            continue
+
+        try:
+            validate_payload(parsed, question=question, required_keys=required_keys)
+            normalized = normalize_payload(parsed, question=question, allowed_snippet_ids=allowed)
+        except ValueError as e:
+            last_error = str(e)
+            if attempt < question.ask_max_attempts:
+                continue
+            raise
+
+        route, route_reason = decide_route(normalized, question)
+        return AskResult(
+            payload=normalized,
+            raw_response=raw_response,
+            prompt=prompt,
+            route=route,
+            route_reason=route_reason,
+            error="",
+        )
+
+    raise ValueError(last_error or "Classify ask failed after retries")
 
 
 def classify_org_dir(org_id: str, question_id: str) -> Path:
@@ -981,26 +1211,36 @@ def review_classifications(
             return f"[{C_MUTED}]-[/{C_MUTED}]"
         return ", ".join(str(item) for item in value)
 
-    def review_reason_text(auto_result: str, payload: dict[str, object]) -> str:
-        primary_focus = str(payload.get("primary_focus", "") or "")
-        service_mode = str(payload.get("service_mode", "") or "")
-        primary_focus_conf = float(payload.get("primary_focus_confidence", 0.0) or 0.0)
-        confidence = float(payload.get("confidence", 0.0) or 0.0)
-        secondary = payload.get("secondary_focuses", [])
-
+    def review_reason_text(auto_result: str, ask_payload: dict[str, object]) -> str:
         if auto_result == "waiting_for_clean_text":
             return "Missing usable cleaned text; classify ask could not run."
-        if primary_focus == "education":
-            return "Education focus is always routed to manual review."
-        if primary_focus not in {"humans", "unknown", "mixed", "other", "education"} and (
-            isinstance(secondary, list) and "humans" in secondary
-        ):
-            return "Non-human primary focus but humans appear as secondary focus."
-        if primary_focus_conf >= 0.8 and confidence <= 0.6:
-            return "Focus confidence and overall confidence are conflicting."
-        if service_mode in {"unknown", "mixed", "indirect_only"}:
-            return "Service mode is not clearly direct human support."
+        route_reason = str(ask_payload.get("route_reason", "") or "").strip()
+        if route_reason:
+            return route_reason
+        error = str(ask_payload.get("error", "") or "").strip()
+        if error:
+            return f"Ask phase reported: {error}"
         return "Rule-based safety routing to manual review."
+
+    def format_review_value(value: object, fmt: str) -> str:
+        normalized = fmt.strip().lower()
+        if normalized in {"confidence", "float_conf"}:
+            return fmt_float_conf(value)
+        if normalized in {"list", "array"}:
+            return compact_list(value)
+        if normalized in {"json", "object"}:
+            if value is None or value == "":
+                return f"[{C_MUTED}]-[/{C_MUTED}]"
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        if isinstance(value, list):
+            return compact_list(value)
+        if isinstance(value, float):
+            return f"{value:.2f}"
+        text = str(value or "").strip()
+        return text if text else f"[{C_MUTED}]-[/{C_MUTED}]"
 
     cols = question_columns(question.id)
     stats = {
@@ -1055,13 +1295,7 @@ def review_classifications(
         zefix_purpose = str(row.get("_zefix_purpose", "") or "").strip()
         zefix_status = str(row.get("_zefix_status", "") or "").strip()
 
-        primary_focus = str(normalized_payload.get("primary_focus", "") or "")
-        service_mode = str(normalized_payload.get("service_mode", "") or "")
         reason = str(normalized_payload.get("reason", "") or "")
-        primary_focus_conf = normalized_payload.get("primary_focus_confidence", "")
-        confidence = normalized_payload.get("confidence", "")
-        secondary = normalized_payload.get("secondary_focuses", [])
-        subgroups = normalized_payload.get("subgroup_labels", [])
         evidence = normalized_payload.get("evidence", [])
         snippets = ask_payload.get("snippets", []) if isinstance(ask_payload, dict) else []
         snippet_map: dict[str, str] = {}
@@ -1108,23 +1342,32 @@ def review_classifications(
             ]
             console.print(make_panel(make_kv_table(org_rows), "Organization"))
 
-            pred_rows = [
-                (
-                    "Primary focus",
-                    f"[bold]{primary_focus or '-'}[/bold] "
-                    f"({fmt_float_conf(primary_focus_conf)})",
-                ),
-                (
-                    "Service mode",
-                    f"[bold]{service_mode or '-'}[/bold] ({fmt_float_conf(confidence)})",
-                ),
-                ("Secondary", compact_list(secondary)),
-                ("Subgroups", compact_list(subgroups)),
-                (
-                    "Reason",
-                    f"[{C_MUTED}]{reason or '-'}[/{C_MUTED}]",
-                ),
-            ]
+            pred_rows: list[tuple[str, str]] = []
+            for review_field in question.review_fields:
+                value = _field_value(normalized_payload, review_field.field)
+                rendered = format_review_value(value, review_field.format)
+                if review_field.confidence_field:
+                    confidence_value = _field_value(
+                        normalized_payload,
+                        review_field.confidence_field,
+                    )
+                    rendered = f"[bold]{rendered}[/bold] ({fmt_float_conf(confidence_value)})"
+                pred_rows.append((review_field.label, rendered))
+
+            if not pred_rows:
+                for key in sorted(normalized_payload.keys()):
+                    if key == "evidence":
+                        continue
+                    value = normalized_payload.get(key)
+                    pred_rows.append((key, format_review_value(value, "auto")))
+
+            includes_reason = any(
+                review_field.field.strip().lower() == "reason"
+                for review_field in question.review_fields
+            )
+            if "reason" in normalized_payload and not includes_reason:
+                pred_rows.append(("Reason", f"[{C_MUTED}]{reason or '-'}[/{C_MUTED}]"))
+
             console.print(make_panel(make_kv_table(pred_rows), "LLM Classification"))
 
             zefix_rows = [
@@ -1143,7 +1386,7 @@ def review_classifications(
             ]
             console.print(make_panel(make_kv_table(zefix_rows), "Registry Context"))
 
-            reason_panel = review_reason_text(auto_result, normalized_payload)
+            reason_panel = review_reason_text(auto_result, ask_payload)
             console.print(
                 make_panel(
                     f"[{C_MUTED}]{reason_panel}[/{C_MUTED}]",

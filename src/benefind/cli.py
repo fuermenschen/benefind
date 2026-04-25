@@ -4614,6 +4614,7 @@ def classify(
         org_id = str(row.get("_org_id", "") or "").strip()
         org_name = str(row.get(name_column, "") or "").strip()
         org_location = str(row.get(location_column, "") or "").strip() if location_column else ""
+        verified_purpose = str(row.get("_zefix_purpose", "") or "").strip()
         snippets = collect_evidence_snippets(org_id, selected_question)
 
         error_message = ""
@@ -4631,7 +4632,14 @@ def classify(
                 console.print(f"Payload: {payload}")
                 return
 
-            result = classify_once(org_name, org_location, snippets, selected_question, settings)
+            result = classify_once(
+                org_name,
+                org_location,
+                verified_purpose,
+                snippets,
+                selected_question,
+                settings,
+            )
         except Exception as e:
             error_message = str(e)
 
@@ -4666,6 +4674,7 @@ def classify(
             org_location = (
                 str(row.get(location_column, "") or "").strip() if location_column else ""
             )
+            verified_purpose = str(row.get("_zefix_purpose", "") or "").strip()
             snippets = collect_evidence_snippets(org_id, selected_question)
             if not snippets:
                 return {
@@ -4679,6 +4688,7 @@ def classify(
                 result = classify_once(
                     org_name,
                     org_location,
+                    verified_purpose,
                     snippets,
                     selected_question,
                     settings,
@@ -4756,6 +4766,7 @@ def classify(
                             "org_id": org_id,
                             "org_name": org_name,
                             "route": result.route,
+                            "route_reason": result.route_reason,
                             "normalized": result.payload,
                             "snippets": snippets,
                             "prompt": result.prompt,
