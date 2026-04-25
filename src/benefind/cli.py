@@ -4477,6 +4477,27 @@ def classify(
             )
             save_checkpoint()
 
+    # Tighten classify eligibility: require both scrape-clean summary eligibility and
+    # physically present cleaned pages to avoid no-snippet classify attempts.
+    org_ids_series_all = base_df["_org_id"].astype(str).str.strip()
+    active_mask_for_content = base_df["_excluded_reason"].astype(str).str.strip() == ""
+    active_org_ids = {
+        org_id for org_id in org_ids_series_all.loc[active_mask_for_content].tolist() if org_id
+    }
+    orgs_without_pages_cleaned: set[str] = set()
+    for org_id in active_org_ids:
+        pages_cleaned_dir = PROJECT_ROOT / "data" / "orgs" / org_id / "pages_cleaned"
+        has_cleaned_pages = pages_cleaned_dir.exists() and pages_cleaned_dir.is_dir() and any(
+            path.is_file() for path in pages_cleaned_dir.glob("*.md")
+        )
+        if not has_cleaned_pages:
+            orgs_without_pages_cleaned.add(org_id)
+
+    if orgs_without_pages_cleaned:
+        eligible_org_ids = {
+            org_id for org_id in eligible_org_ids if org_id not in orgs_without_pages_cleaned
+        }
+
     selected_question = None
     selected_phase = phase_norm
     selected_counts = (0, 0)

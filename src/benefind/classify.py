@@ -829,6 +829,19 @@ def review_classifications(
     interactive: bool,
     save_callback=None,
 ) -> dict[str, int]:
+    def normalize_review_url(value: object) -> str:
+        if pd.isna(value):
+            return ""
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        lowered = text.lower()
+        if lowered in {"nan", "none", "null"}:
+            return ""
+        if not lowered.startswith(("http://", "https://")):
+            return ""
+        return text
+
     def open_url(url: str) -> bool:
         value = str(url or "").strip()
         if not value:
@@ -892,7 +905,7 @@ def review_classifications(
         stats["remaining"] = len(queue_indices)
         return stats
 
-    valid_keys = ["a", "x", "w", "f", "v", "s", "q"]
+    valid_keys = ["a", "x", "o", "w", "f", "v", "s", "q"]
     for pos, idx in enumerate(queue_indices, start=1):
         row = df.loc[idx]
         org_id = str(row.get("_org_id", "") or "").strip()
@@ -924,9 +937,9 @@ def review_classifications(
         auto_result_at = str(row.get(cols["auto_result_at"], "") or "")
         review_result = str(row.get(cols["review_result"], "") or "")
         review_result_at = str(row.get(cols["review_result_at"], "") or "")
-        website_url = str(row.get("_website_url_final", "") or "").strip() or str(
-            row.get("_website_url", "") or ""
-        ).strip()
+        website_url_final = normalize_review_url(row.get("_website_url_final", ""))
+        website_url_candidate = normalize_review_url(row.get("_website_url", ""))
+        website_url = website_url_final or website_url_candidate
         zefix_purpose = str(row.get("_zefix_purpose", "") or "").strip()
         zefix_status = str(row.get("_zefix_status", "") or "").strip()
 
@@ -1053,7 +1066,7 @@ def review_classifications(
                         [
                             ("a", "accept in scope"),
                             ("x", "mark excluded"),
-                            ("w", "open website"),
+                            ("o", "open website"),
                             ("f", "search org on web"),
                             (
                                 "v",
@@ -1079,7 +1092,7 @@ def review_classifications(
             if key == "s":
                 stats["skipped"] += 1
                 break
-            if key == "w":
+            if key in {"o", "w"}:
                 if not website_url:
                     print_warning("No website URL available.")
                 elif open_url(website_url):
