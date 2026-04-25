@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import re
 import tomllib
 import webbrowser
@@ -33,6 +34,7 @@ from benefind.cli_ui import (
 )
 from benefind.config import CONFIG_DIR, DATA_DIR, Settings, render_prompt_template
 from benefind.csv_io import ensure_text_columns
+from benefind.exclusion_reasons import ExcludeReason
 from benefind.external_api import ExternalApiAccessError, classify_openai_access_error
 from benefind.scrape_clean import load_latest_scrape_clean_summary
 
@@ -1504,6 +1506,391 @@ def review_classifications(
                 break
 
     return stats
+
+
+def classify_conclusions_path() -> Path:
+    path = DATA_DIR / "classify" / "conclusions.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def load_classify_conclusions(path: Path | None = None) -> dict[str, object]:
+    effective_path = path or classify_conclusions_path()
+    if not effective_path.exists():
+        return {}
+    try:
+        data = json.loads(effective_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_classify_conclusions(payload: dict[str, object], path: Path | None = None) -> None:
+    effective_path = path or classify_conclusions_path()
+    effective_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def summarize_question_for_conclude(
+    df: pd.DataFrame,
+    question: ClassifyQuestion,
+    eligible_org_ids: set[str],
+) -> dict[str, int]:
+    cols = question_columns(question.id)
+    active_mask = (
+        df["_excluded_reason"].astype(str).str.strip() == ""
+        if "_excluded_reason" in df.columns
+        else pd.Series(True, index=df.index)
+    )
+    org_ids = df["_org_id"].astype(str).str.strip()
+    eligible_mask = org_ids.isin(eligible_org_ids)
+    scoped_mask = active_mask & eligible_mask
+
+    auto_result = df[cols["auto_result"]].astype(str).str.strip().str.lower()
+    review_result = df[cols["review_result"]].astype(str).str.strip().str.lower()
+
+    auto_accepted_mask = scoped_mask & (auto_result == "auto_accepted")
+    auto_excluded_mask = scoped_mask & (auto_result == "auto_excluded")
+    needs_review_mask = scoped_mask & (auto_result == "needs_review")
+    waiting_for_clean_text_mask = scoped_mask & (auto_result == STATUS_WAITING_FOR_CLEAN_TEXT)
+    ask_pending_mask = scoped_mask & (auto_result == "")
+
+    review_pending_mask = needs_review_mask & (review_result == "")
+    review_accepted_mask = scoped_mask & (review_result == "accepted")
+    review_excluded_mask = scoped_mask & (review_result == "excluded")
+
+    concludable_mask = auto_excluded_mask | review_excluded_mask
+
+    return {
+        "active_eligible": int(scoped_mask.sum()),
+        "ask_pending": int(ask_pending_mask.sum()),
+        "auto_accepted": int(auto_accepted_mask.sum()),
+        "auto_excluded": int(auto_excluded_mask.sum()),
+        "needs_review": int(needs_review_mask.sum()),
+        "waiting_for_clean_text": int(waiting_for_clean_text_mask.sum()),
+        "review_pending": int(review_pending_mask.sum()),
+        "review_accepted": int(review_accepted_mask.sum()),
+        "review_excluded": int(review_excluded_mask.sum()),
+        "concludable_exclusions": int(concludable_mask.sum()),
+    }
+
+
+def _question_conclude_masks(
+    df: pd.DataFrame,
+    question: ClassifyQuestion,
+    eligible_org_ids: set[str],
+) -> dict[str, pd.Series]:
+    cols = question_columns(question.id)
+    active_mask = (
+        df["_excluded_reason"].astype(str).str.strip() == ""
+        if "_excluded_reason" in df.columns
+        else pd.Series(True, index=df.index)
+    )
+    org_ids = df["_org_id"].astype(str).str.strip()
+    eligible_mask = org_ids.isin(eligible_org_ids)
+    scoped_mask = active_mask & eligible_mask
+
+    auto_result = df[cols["auto_result"]].astype(str).str.strip().str.lower()
+    review_result = df[cols["review_result"]].astype(str).str.strip().str.lower()
+    needs_review = auto_result == "needs_review"
+
+    return {
+        "auto_accepted": scoped_mask & (auto_result == "auto_accepted"),
+        "auto_excluded": scoped_mask & (auto_result == "auto_excluded"),
+        "review_accepted": scoped_mask & (review_result == "accepted"),
+        "review_excluded": scoped_mask & (review_result == "excluded"),
+        "review_pending": scoped_mask & needs_review & (review_result == ""),
+    }
+
+
+def apply_conclude_updates(
+    df: pd.DataFrame,
+    question: ClassifyQuestion,
+    eligible_org_ids: set[str],
+) -> dict[str, int]:
+    ensure_text_columns(df, ["_excluded_reason", "_excluded_reason_note", "_excluded_at"])
+
+    masks = _question_conclude_masks(df, question, eligible_org_ids)
+    auto_mask = masks["auto_excluded"]
+    review_mask = masks["review_excluded"]
+    apply_mask = auto_mask | review_mask
+    if int(apply_mask.sum()) == 0:
+        return {"applied_total": 0, "applied_auto_excluded": 0, "applied_review_excluded": 0}
+
+    now = datetime.now(UTC).isoformat(timespec="seconds")
+    reason_value = ExcludeReason.IRRELEVANT_PURPOSE.value
+    current_notes = df["_excluded_reason_note"].astype(str)
+
+    df.loc[apply_mask, "_excluded_reason"] = reason_value
+    df.loc[apply_mask, "_excluded_at"] = now
+
+    auto_note = f"classify:{question.id}:auto_excluded"
+    review_note = f"classify:{question.id}:review_excluded"
+
+    auto_only = auto_mask & ~review_mask
+    review_only = review_mask
+    if int(auto_only.sum()) > 0:
+        blank_auto = auto_only & (current_notes.str.strip() == "")
+        non_blank_auto = auto_only & (current_notes.str.strip() != "")
+        df.loc[blank_auto, "_excluded_reason_note"] = auto_note
+        df.loc[non_blank_auto, "_excluded_reason_note"] = (
+            current_notes.loc[non_blank_auto].str.strip() + " | " + auto_note
+        )
+
+    if int(review_only.sum()) > 0:
+        blank_review = review_only & (current_notes.str.strip() == "")
+        non_blank_review = review_only & (current_notes.str.strip() != "")
+        df.loc[blank_review, "_excluded_reason_note"] = review_note
+        df.loc[non_blank_review, "_excluded_reason_note"] = (
+            current_notes.loc[non_blank_review].str.strip() + " | " + review_note
+        )
+
+    return {
+        "applied_total": int(apply_mask.sum()),
+        "applied_auto_excluded": int(auto_mask.sum()),
+        "applied_review_excluded": int(review_mask.sum()),
+    }
+
+
+def _pick_random_index(mask: pd.Series) -> int | None:
+    indices = list(mask[mask].index)
+    if not indices:
+        return None
+    return int(random.choice(indices))
+
+
+def _conclude_example_rows(
+    df: pd.DataFrame,
+    row_index: int,
+    *,
+    question: ClassifyQuestion,
+    name_column: str,
+) -> list[tuple[str, str]]:
+    row = df.loc[row_index]
+    cols = question_columns(question.id)
+    org_id = str(row.get("_org_id", "") or "").strip()
+    org_name = str(row.get(name_column, "") or "").strip() or "-"
+    website = str(row.get("_website_url_final", "") or "").strip() or str(
+        row.get("_website_url", "") or ""
+    ).strip()
+    auto_result = str(row.get(cols["auto_result"], "") or "").strip() or "-"
+    review_result = str(row.get(cols["review_result"], "") or "").strip() or "-"
+
+    ask_payload = read_org_artifact(classify_org_dir(org_id, question.id) / "ask.json")
+    route_reason = str(ask_payload.get("route_reason", "") or "").strip() or "-"
+    normalized = ask_payload.get("normalized", {}) if isinstance(ask_payload, dict) else {}
+    reason_raw = normalized.get("reason", "") if isinstance(normalized, dict) else ""
+    reason = str(reason_raw).strip() or "-"
+
+    return [
+        ("Org", org_name),
+        ("Org ID", org_id or "-"),
+        ("Website", website or "-"),
+        ("Auto result", auto_result),
+        ("Review result", review_result),
+        ("Route reason", route_reason),
+        ("LLM reason", reason),
+    ]
+
+
+def conclude_question(
+    df: pd.DataFrame,
+    question: ClassifyQuestion,
+    eligible_org_ids: set[str],
+    *,
+    interactive: bool,
+    name_column: str,
+    save_callback=None,
+) -> dict[str, int]:
+    stats = summarize_question_for_conclude(df, question, eligible_org_ids)
+    if stats["ask_pending"] > 0:
+        return {
+            "status": 0,
+            "blocked_ask_pending": int(stats["ask_pending"]),
+            "blocked_review_pending": 0,
+            "applied_total": 0,
+            "applied_auto_excluded": 0,
+            "applied_review_excluded": 0,
+        }
+
+    if stats["review_pending"] > 0:
+        return {
+            "status": 0,
+            "blocked_ask_pending": 0,
+            "blocked_review_pending": int(stats["review_pending"]),
+            "applied_total": 0,
+            "applied_auto_excluded": 0,
+            "applied_review_excluded": 0,
+        }
+
+    if not interactive:
+        return {
+            "status": 1,
+            "blocked_ask_pending": 0,
+            "blocked_review_pending": 0,
+            "applied_total": 0,
+            "applied_auto_excluded": 0,
+            "applied_review_excluded": 0,
+        }
+
+    masks = _question_conclude_masks(df, question, eligible_org_ids)
+    last_sample_index: int | None = None
+    valid_keys = ["u", "x", "a", "e", "o", "c", "q"]
+
+    while True:
+        latest_stats = summarize_question_for_conclude(df, question, eligible_org_ids)
+        clear()
+        summary_rows = [
+            ("Question", question.id),
+            ("Description", question.description or "-"),
+            ("Active eligible", latest_stats["active_eligible"]),
+            ("Ask pending", latest_stats["ask_pending"]),
+            ("Auto accepted", latest_stats["auto_accepted"]),
+            ("Auto excluded", latest_stats["auto_excluded"]),
+            ("Needs review", latest_stats["needs_review"]),
+            ("Review pending", latest_stats["review_pending"]),
+            ("Review accepted", latest_stats["review_accepted"]),
+            ("Review excluded", latest_stats["review_excluded"]),
+            ("Concludable exclusions", latest_stats["concludable_exclusions"]),
+        ]
+        console.print(make_panel(make_kv_table(summary_rows), "Classify Conclude"))
+
+        if last_sample_index is not None and last_sample_index in df.index:
+            rows = _conclude_example_rows(
+                df,
+                last_sample_index,
+                question=question,
+                name_column=name_column,
+            )
+            console.print(make_panel(make_kv_table(rows), "Last Sample"))
+        else:
+            console.print(
+                make_panel(
+                    f"[{C_MUTED}]No sample selected yet.[/{C_MUTED}]",
+                    "Last Sample",
+                )
+            )
+
+        console.print(
+            make_panel(
+                make_actions_table(
+                    [
+                        ("u", "sample auto accepted"),
+                        ("x", "sample auto excluded"),
+                        ("a", "sample review accepted"),
+                        ("e", "sample review excluded"),
+                        ("o", "open sample website"),
+                        ("c", "confirm conclude + apply"),
+                        ("q", "quit"),
+                    ]
+                ),
+                "Actions",
+            )
+        )
+
+        try:
+            key = wait_for_key(valid_keys)
+        except KeyboardInterrupt:
+            return {
+                "status": 2,
+                "blocked_ask_pending": 0,
+                "blocked_review_pending": 0,
+                "applied_total": 0,
+                "applied_auto_excluded": 0,
+                "applied_review_excluded": 0,
+            }
+
+        if key == "q":
+            return {
+                "status": 2,
+                "blocked_ask_pending": 0,
+                "blocked_review_pending": 0,
+                "applied_total": 0,
+                "applied_auto_excluded": 0,
+                "applied_review_excluded": 0,
+            }
+
+        if key in {"u", "x", "a", "e"}:
+            bucket_map = {
+                "u": masks["auto_accepted"],
+                "x": masks["auto_excluded"],
+                "a": masks["review_accepted"],
+                "e": masks["review_excluded"],
+            }
+            sampled = _pick_random_index(bucket_map[key])
+            if sampled is None:
+                print_warning("No rows available in that bucket.")
+            else:
+                last_sample_index = sampled
+            continue
+
+        if key == "o":
+            if last_sample_index is None or last_sample_index not in df.index:
+                print_warning("Select a sample first.")
+                continue
+            sample_row = df.loc[last_sample_index]
+            website = str(sample_row.get("_website_url_final", "") or "").strip() or str(
+                sample_row.get("_website_url", "") or ""
+            ).strip()
+            if not website:
+                print_warning("Selected sample has no website URL.")
+                continue
+            try:
+                opened = bool(webbrowser.open(website))
+            except Exception:
+                opened = False
+            if opened:
+                print_success(f"Opened website: {website}")
+            else:
+                print_warning(f"Could not open browser. URL: {website}")
+            continue
+
+        if key == "c":
+            confirm_text = (
+                "Finalize this question and write global exclusions for "
+                "auto_excluded/review_excluded rows?"
+            )
+            if not confirm(confirm_text, default=False):
+                continue
+
+            applied = apply_conclude_updates(df, question, eligible_org_ids)
+            if save_callback is not None:
+                save_callback()
+
+            existing = load_classify_conclusions()
+            payload = existing if existing else {"version": 1, "questions": {}}
+            questions_obj = payload.get("questions", {})
+            if not isinstance(questions_obj, dict):
+                questions_obj = {}
+            questions_obj[question.id] = {
+                "concluded_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                "applied_total": int(applied["applied_total"]),
+                "applied_auto_excluded": int(applied["applied_auto_excluded"]),
+                "applied_review_excluded": int(applied["applied_review_excluded"]),
+                "stats_snapshot": summarize_question_for_conclude(df, question, eligible_org_ids),
+            }
+            payload["version"] = 1
+            payload["questions"] = questions_obj
+            payload["updated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+            save_classify_conclusions(payload)
+
+            return {
+                "status": 3,
+                "blocked_ask_pending": 0,
+                "blocked_review_pending": 0,
+                "applied_total": int(applied["applied_total"]),
+                "applied_auto_excluded": int(applied["applied_auto_excluded"]),
+                "applied_review_excluded": int(applied["applied_review_excluded"]),
+            }
+
+    # Unreachable fallback for type-checkers.
+    return {
+        "status": 2,
+        "blocked_ask_pending": 0,
+        "blocked_review_pending": 0,
+        "applied_total": 0,
+        "applied_auto_excluded": 0,
+        "applied_review_excluded": 0,
+    }
 
 
 def format_debug_result(

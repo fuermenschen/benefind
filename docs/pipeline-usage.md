@@ -305,6 +305,17 @@ artifacts for downstream manual analysis.
 - this gate is enforced for classify-eligible rows (organizations with usable cleaned text)
 - otherwise classify stops with guidance to run verify/review first
 
+`benefind classify` phase model:
+
+- step order is `ask -> review -> conclude`
+- `conclude` shows per-question totals (auto accepted/excluded, review accepted/excluded, pending)
+- `conclude` supports hotkeys to inspect random examples from automatic/manual outcome buckets
+- `conclude` is blocked until both ask and review are complete for the selected question
+- only after explicit conclude confirmation are global exclusions written:
+  - rows with `_classify_<question>_auto_result=auto_excluded`
+  - rows with `_classify_<question>_review_result=excluded`
+  - global fields updated: `_excluded_reason=IRRELEVANT_PURPOSE`, `_excluded_reason_note`, `_excluded_at`
+
 `benefind scrape-clean` behavior highlights:
 
 - keeps raw scraped markdown in `data/orgs/<_org_id>/pages/` untouched

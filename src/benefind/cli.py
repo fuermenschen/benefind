@@ -4206,7 +4206,7 @@ def classify(
     phase: str = typer.Option(
         "auto",
         "--phase",
-        help="Phase to run: auto, ask, or review.",
+        help="Phase to run: auto, ask, review, or conclude.",
     ),
     refresh: bool = typer.Option(
         False,
@@ -4276,6 +4276,7 @@ def classify(
         classify_org_dir,
         cleanup_legacy_classify_columns,
         collect_evidence_snippets,
+        conclude_question,
         count_phase,
         ensure_compact_classify_columns,
         ensure_question_columns,
@@ -4293,6 +4294,7 @@ def classify(
         restore_eligible_waiting_rows,
         review_classifications,
         save_registry_lock,
+        summarize_question_for_conclude,
         update_classify_meta,
         write_org_artifact,
     )
@@ -4303,8 +4305,8 @@ def classify(
     interactive = wizard and sys.stdin.isatty() and sys.stdout.isatty()
 
     phase_norm = phase.strip().lower()
-    if phase_norm not in {"auto", "ask", "review"}:
-        raise typer.BadParameter("--phase must be one of: auto, ask, review")
+    if phase_norm not in {"auto", "ask", "review", "conclude"}:
+        raise typer.BadParameter("--phase must be one of: auto, ask, review, conclude")
 
     if subset and subset_size <= 0:
         raise typer.BadParameter("--size/-n must be greater than 0 when --subset is used.")
@@ -4491,29 +4493,55 @@ def classify(
     selected_question = None
     selected_phase = phase_norm
     selected_counts = (0, 0)
+    selected_conclude_count = 0
 
     if phase_norm == "auto":
         for item in active_questions:
             ask_pending, review_pending = count_phase(base_df, item, eligible_org_ids)
+            conclude_stats = summarize_question_for_conclude(base_df, item, eligible_org_ids)
+            conclude_pending = int(conclude_stats.get("concludable_exclusions", 0) or 0)
             if ask_pending > 0:
                 selected_question = item
                 selected_phase = "ask"
                 selected_counts = (ask_pending, review_pending)
+                selected_conclude_count = conclude_pending
                 break
             if review_pending > 0:
                 selected_question = item
                 selected_phase = "review"
                 selected_counts = (ask_pending, review_pending)
+                selected_conclude_count = conclude_pending
+                break
+            if conclude_pending > 0 and interactive:
+                selected_question = item
+                selected_phase = "conclude"
+                selected_counts = (ask_pending, review_pending)
+                selected_conclude_count = conclude_pending
                 break
     else:
         for item in active_questions:
             ask_pending, review_pending = count_phase(base_df, item, eligible_org_ids)
+            conclude_stats = summarize_question_for_conclude(base_df, item, eligible_org_ids)
+            conclude_pending = int(conclude_stats.get("concludable_exclusions", 0) or 0)
             if (phase_norm == "ask" and ask_pending > 0) or (
                 phase_norm == "review" and review_pending > 0
-            ):
+            ) or (phase_norm == "conclude" and conclude_pending > 0):
                 selected_question = item
                 selected_phase = phase_norm
                 selected_counts = (ask_pending, review_pending)
+                selected_conclude_count = conclude_pending
+                break
+            if phase_norm == "conclude" and review_pending > 0:
+                selected_question = item
+                selected_phase = phase_norm
+                selected_counts = (ask_pending, review_pending)
+                selected_conclude_count = conclude_pending
+                break
+            if phase_norm == "conclude" and ask_pending > 0:
+                selected_question = item
+                selected_phase = phase_norm
+                selected_counts = (ask_pending, review_pending)
+                selected_conclude_count = conclude_pending
                 break
 
     if selected_question is None:
@@ -4523,26 +4551,29 @@ def classify(
         )
         return
 
-    if "_discover_verify_status" not in base_df.columns:
+    if selected_phase != "conclude" and "_discover_verify_status" not in base_df.columns:
         raise typer.BadParameter(
             "Missing discover verification columns. Run benefind verify-discover first."
         )
 
-    verify_status = base_df["_discover_verify_status"].astype(str).str.strip().str.lower()
-    active_mask_for_verify = base_df["_excluded_reason"].astype(str).str.strip() == ""
-    eligible_for_classify_verify = base_df["_org_id"].astype(str).str.strip().isin(eligible_org_ids)
-    unverified_mask = (
-        active_mask_for_verify
-        & eligible_for_classify_verify
-        & ~verify_status.isin({"confirmed"})
-    )
-    unverified_count = int(unverified_mask.sum())
-    if unverified_count > 0:
-        raise typer.BadParameter(
-            "Discover verification incomplete: "
-            f"{unverified_count} active rows are not confirmed. "
-            "Run benefind verify-discover and benefind review discover-mismatches first."
+    if selected_phase != "conclude":
+        verify_status = base_df["_discover_verify_status"].astype(str).str.strip().str.lower()
+        active_mask_for_verify = base_df["_excluded_reason"].astype(str).str.strip() == ""
+        eligible_for_classify_verify = (
+            base_df["_org_id"].astype(str).str.strip().isin(eligible_org_ids)
         )
+        unverified_mask = (
+            active_mask_for_verify
+            & eligible_for_classify_verify
+            & ~verify_status.isin({"confirmed"})
+        )
+        unverified_count = int(unverified_mask.sum())
+        if unverified_count > 0:
+            raise typer.BadParameter(
+                "Discover verification incomplete: "
+                f"{unverified_count} active rows are not confirmed. "
+                "Run benefind verify-discover and benefind review discover-mismatches first."
+            )
 
     cols = question_columns(selected_question.id)
     org_ids_series = base_df["_org_id"].astype(str).str.strip()
@@ -4554,16 +4585,23 @@ def classify(
             & org_ids_series.isin(eligible_org_ids)
             & (base_df[cols["auto_result"]].astype(str).str.strip() == "")
         )
-    else:
+    elif selected_phase == "review":
         queue_mask = active_mask & (
             (base_df[cols["auto_result"]].astype(str).str.strip().str.lower() == "needs_review")
             & (base_df[cols["review_result"]].astype(str).str.strip() == "")
         )
 
-    queue_df = base_df[queue_mask]
-    if queue_df.empty:
-        console.print("[yellow]Selected phase has no pending rows.[/yellow]")
-        return
+    queue_df = pd.DataFrame()
+    if selected_phase in {"ask", "review"}:
+        queue_df = base_df[queue_mask]
+        if queue_df.empty:
+            console.print("[yellow]Selected phase has no pending rows.[/yellow]")
+            return
+
+    if selected_phase == "conclude" and subset:
+        raise typer.BadParameter("--subset is only supported for ask/review phases.")
+    if selected_phase == "conclude" and stop_after is not None:
+        raise typer.BadParameter("--stop-after is only supported for ask/review phases.")
 
     if subset:
         seed = subset_seed if subset_seed is not None else random.SystemRandom().randrange(1, 10**9)
@@ -4582,10 +4620,15 @@ def classify(
     if stop_after is not None:
         queue_df = queue_df.head(stop_after)
 
-    queue_indices = list(queue_df.index)
-    if not queue_indices:
-        console.print("[yellow]No rows selected after subset/stop filters.[/yellow]")
-        return
+    queue_indices: list[int] = []
+    if selected_phase in {"ask", "review"}:
+        queue_indices = list(queue_df.index)
+        if not queue_indices:
+            console.print("[yellow]No rows selected after subset/stop filters.[/yellow]")
+            return
+
+    if selected_phase == "conclude" and (debug_sample or debug_org_id or debug_org_name):
+        raise typer.BadParameter("Debug flags are only supported for ask/review phases.")
 
     if debug_sample or debug_org_id or debug_org_name:
         sample_df = queue_df
@@ -4656,11 +4699,70 @@ def classify(
             ("Workers", workers if selected_phase == "ask" else "-"),
             ("Ask pending", selected_counts[0]),
             ("Review pending", selected_counts[1]),
-            ("Selected rows", len(queue_indices)),
+            ("Conclude pending", selected_conclude_count),
+            ("Selected rows", len(queue_indices) if selected_phase in {"ask", "review"} else "-"),
             ("Input", str(input_path)),
             ("Output", str(output_path)),
         ],
     )
+
+    if selected_phase == "conclude":
+        conclude_stats = summarize_question_for_conclude(
+            base_df,
+            selected_question,
+            eligible_org_ids,
+        )
+        result = conclude_question(
+            base_df,
+            selected_question,
+            eligible_org_ids,
+            interactive=interactive,
+            name_column=name_column,
+            save_callback=lambda: (update_classify_meta(base_df), save_checkpoint()),
+        )
+        if result.get("blocked_ask_pending", 0):
+            print_warning(
+                "Conclude is blocked until ask is complete. "
+                f"Pending ask rows: {result.get('blocked_ask_pending', 0)}"
+            )
+            return
+        if result.get("blocked_review_pending", 0):
+            print_warning(
+                "Conclude is blocked until review is complete. "
+                f"Pending review rows: {result.get('blocked_review_pending', 0)}"
+            )
+            return
+
+        if result.get("status", 0) == 1:
+            print_warning("Conclude phase requires interactive terminal.")
+            print_summary(
+                "Classify Conclude Summary",
+                [
+                    ("Question", selected_question.id),
+                    ("Auto accepted", conclude_stats["auto_accepted"]),
+                    ("Auto excluded", conclude_stats["auto_excluded"]),
+                    ("Review accepted", conclude_stats["review_accepted"]),
+                    ("Review excluded", conclude_stats["review_excluded"]),
+                    ("Concludable exclusions", conclude_stats["concludable_exclusions"]),
+                ],
+            )
+            return
+
+        if result.get("status", 0) == 3:
+            print_summary(
+                "Classify Conclude Applied",
+                [
+                    ("Question", selected_question.id),
+                    ("Applied total", result.get("applied_total", 0)),
+                    ("Applied auto_excluded", result.get("applied_auto_excluded", 0)),
+                    ("Applied review_excluded", result.get("applied_review_excluded", 0)),
+                    ("Saved", str(output_path)),
+                ],
+            )
+            return
+
+        print_warning("Conclude cancelled. No global updates were written.")
+        return
 
     if selected_phase == "ask":
         from concurrent.futures import ThreadPoolExecutor, as_completed
