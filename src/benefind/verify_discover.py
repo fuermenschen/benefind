@@ -20,6 +20,7 @@ DISCOVER_VERIFY_TEXT_COLUMNS = [
     "_discover_verify_reason",
     "_discover_verify_stage",
     "_discover_verify_llm_reason",
+    "_discover_verify_llm_evidence",
     "_discover_verified_at",
 ]
 
@@ -85,6 +86,7 @@ class DiscoverVerificationResult:
     llm_belongs: bool | None = None
     llm_score: int | None = None
     llm_reason: str = ""
+    llm_evidence: str = ""
 
 
 def _normalize_ascii(text: str) -> str:
@@ -224,11 +226,11 @@ def _llm_verify_discover_match(
     website_url: str,
     content: str,
     settings: Settings,
-) -> tuple[bool | None, int | None, str]:
+) -> tuple[bool | None, int | None, str, str]:
     try:
         from openai import OpenAI
     except Exception:
-        return None, None, "llm_unavailable"
+        return None, None, "llm_unavailable", ""
 
     if not os.environ.get("OPENAI_API_KEY", ""):
         raise ExternalApiAccessError(
@@ -263,7 +265,7 @@ def _llm_verify_discover_match(
         access_error = classify_openai_access_error(e)
         if access_error is not None:
             raise access_error
-        return None, None, f"llm_error:{e}"
+        return None, None, f"llm_error:{e}", ""
 
     payload = _extract_json_object(str(getattr(response, "output_text", "") or ""))
     belongs_raw = payload.get("belongs")
@@ -280,7 +282,8 @@ def _llm_verify_discover_match(
     score = max(0, min(100, score))
 
     reason = str(payload.get("reason", "") or "").strip()
-    return belongs, score, reason
+    evidence = str(payload.get("evidence", "") or "").strip()
+    return belongs, score, reason, evidence
 
 
 def _build_rule_score(
@@ -346,7 +349,7 @@ def verify_discover_match(
             rule_location_match=location_ok,
         )
 
-    llm_belongs, llm_score, llm_reason = _llm_verify_discover_match(
+    llm_belongs, llm_score, llm_reason, llm_evidence = _llm_verify_discover_match(
         org_name=org_name,
         org_location=org_location,
         website_url=website_url,
@@ -367,6 +370,7 @@ def verify_discover_match(
             llm_belongs=llm_belongs,
             llm_score=llm_score,
             llm_reason=llm_reason,
+            llm_evidence=llm_evidence,
         )
 
     return DiscoverVerificationResult(
@@ -381,6 +385,7 @@ def verify_discover_match(
         llm_belongs=llm_belongs,
         llm_score=llm_score,
         llm_reason=llm_reason,
+        llm_evidence=llm_evidence,
     )
 
 

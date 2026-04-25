@@ -1,21 +1,37 @@
 [prompt]
 id = "discover.mismatch_verify"
-description = "Verify whether discovered website content belongs to the organization"
+description = "Verify whether candidate website/content belongs to the exact organization identity"
 template = """
-You verify whether website content belongs to a Swiss nonprofit organization.
-Return JSON only with keys: belongs, score, reason.
+You are verifying organization identity.
+Decide whether the candidate website and snippets belong to the exact same Swiss nonprofit organization.
+Return JSON only with keys: belongs, score, reason, evidence.
 
-Organization: {org_name}
-Location: {org_location}
-Website URL: {website_url}
+Known organization name: {org_name}
+Known organization location: {org_location}
+
+Candidate website URL: {website_url}
 
 Content snippets:
 {content_snippets}
 
-Rules:
-- belongs must be true only when the evidence strongly indicates this is the same organization.
+Decision rules:
+- This is an exact identity check, not a similarity check.
+- belongs may be true only when evidence strongly indicates the exact same organization.
+- Treat organization name as primary evidence anchor.
+- Location and URL/domain are supporting evidence only.
+- If snippets explicitly name a different organization, set belongs=false unless snippets explicitly show alias/former-name/abbreviation/project/umbrella relation to the known organization.
+- Similar mission, same city, overlapping keywords, or generic legal-form words (e.g., Verein, Stiftung, Menschen) are not enough.
+- If uncertain, prefer belongs=false.
+
+Scoring:
 - score must be an integer from 0 to 100.
-- reason must be short and specific.
+- 90-100: explicit evidence of exact same organization.
+- 60-89: partial evidence but identity not conclusive.
+- 0-59: mismatch, weak evidence, or uncertainty.
+
+Output fields:
+- reason: short decision summary.
+- evidence: short concrete evidence quote or contradiction from snippets; mention differing organization name when relevant.
 """
 
 [prompt.placeholders]
@@ -26,4 +42,4 @@ content_snippets = "Representative cleaned content snippets"
 
 [prompt.response]
 format = "json_object"
-required_keys = ["belongs", "score", "reason"]
+required_keys = ["belongs", "score", "reason", "evidence"]

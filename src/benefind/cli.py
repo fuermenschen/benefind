@@ -3488,6 +3488,7 @@ def verify_discover(
         llm_belongs: bool | None,
         llm_score: int | None,
         llm_reason: str,
+        llm_evidence: str,
     ) -> None:
         df.at[idx, "_discover_verify_status"] = status
         df.at[idx, "_discover_verify_needs_review"] = needs_review
@@ -3502,6 +3503,7 @@ def verify_discover(
         df.at[idx, "_discover_verify_llm_belongs"] = llm_belongs
         df.at[idx, "_discover_verify_llm_score"] = llm_score
         df.at[idx, "_discover_verify_llm_reason"] = llm_reason
+        df.at[idx, "_discover_verify_llm_evidence"] = llm_evidence
         df.at[idx, "_discover_verified_at"] = datetime.now(UTC).isoformat(timespec="seconds")
 
         if needs_review:
@@ -3533,6 +3535,7 @@ def verify_discover(
                 "llm_belongs": None,
                 "llm_score": None,
                 "llm_reason": "",
+                "llm_evidence": "",
             }
 
         content = collect_clean_content(org_id)
@@ -3550,6 +3553,7 @@ def verify_discover(
                 "llm_belongs": None,
                 "llm_score": None,
                 "llm_reason": "",
+                "llm_evidence": "",
             }
 
         result = verify_discover_match(
@@ -3573,6 +3577,7 @@ def verify_discover(
             "llm_belongs": result.llm_belongs,
             "llm_score": result.llm_score,
             "llm_reason": result.llm_reason,
+            "llm_evidence": result.llm_evidence,
         }
 
     if workers == 1:
@@ -3598,6 +3603,7 @@ def verify_discover(
                 llm_belongs=payload["llm_belongs"],
                 llm_score=payload["llm_score"],
                 llm_reason=str(payload["llm_reason"]),
+                llm_evidence=str(payload["llm_evidence"]),
             )
             save_checkpoint()
 
@@ -3636,6 +3642,7 @@ def verify_discover(
                     llm_belongs=payload["llm_belongs"],
                     llm_score=payload["llm_score"],
                     llm_reason=str(payload["llm_reason"]),
+                    llm_evidence=str(payload["llm_evidence"]),
                 )
                 save_checkpoint()
 
