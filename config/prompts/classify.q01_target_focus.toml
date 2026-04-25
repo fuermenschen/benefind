@@ -132,7 +132,7 @@ order = 10
 kind = "pages_cleaned"
 max_snippets = 18
 max_snippet_chars = 800
-min_snippet_chars = 120
+min_snippet_chars = 0
 
 [classify.policy]
 

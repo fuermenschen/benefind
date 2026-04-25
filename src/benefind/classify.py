@@ -8,7 +8,7 @@ import os
 import re
 import tomllib
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -43,8 +43,12 @@ class QuestionSourceConfig:
     kind: str = "pages_cleaned"
     max_snippets: int = 18
     max_snippet_chars: int = 800
-    min_snippet_chars: int = 120
-
+    min_snippet_chars: int = 0
+    selection_mode: str = "file_order"
+    keyword_priority_terms: list[str] = field(default_factory=list)
+    keyword_priority_case_sensitive: bool = False
+    keyword_priority_match_mode: str = "substring"
+    keyword_priority_fill_mode: str = "fallback_file_order"
 
 @dataclass(slots=True)
 class Rule:
@@ -147,6 +151,11 @@ def load_classify_questions(config_dir: Path | None = None) -> list[ClassifyQues
             if isinstance(classify_raw.get("source", {}), dict)
             else {}
         )
+        keyword_priority_raw = (
+            source_raw.get("keyword_priority", {})
+            if isinstance(source_raw.get("keyword_priority", {}), dict)
+            else {}
+        )
         policy_raw = (
             classify_raw.get("policy", {})
             if isinstance(classify_raw.get("policy", {}), dict)
@@ -155,13 +164,56 @@ def load_classify_questions(config_dir: Path | None = None) -> list[ClassifyQues
         rules_raw_value = policy_raw.get("rules", [])
         rules_raw = rules_raw_value if isinstance(rules_raw_value, list) else []
         rules = [_parse_rule(raw, fallback_priority=index) for index, raw in enumerate(rules_raw)]
+        terms_raw = keyword_priority_raw.get("terms", [])
+        if not isinstance(terms_raw, list):
+            raise ValueError(
+                f"Classify question '{qid}' requires source.keyword_priority.terms to be a list"
+            )
 
         source = QuestionSourceConfig(
             kind=str(source_raw.get("kind", "pages_cleaned") or "pages_cleaned").strip(),
             max_snippets=int(source_raw.get("max_snippets", 18) or 18),
             max_snippet_chars=int(source_raw.get("max_snippet_chars", 800) or 800),
-            min_snippet_chars=int(source_raw.get("min_snippet_chars", 120) or 120),
+            min_snippet_chars=int(source_raw.get("min_snippet_chars", 0) or 0),
+            selection_mode=str(source_raw.get("selection_mode", "file_order") or "file_order")
+            .strip()
+            .lower(),
+            keyword_priority_terms=[
+                str(item).strip()
+                for item in terms_raw
+                if str(item).strip()
+            ],
+            keyword_priority_case_sensitive=bool(
+                keyword_priority_raw.get("case_sensitive", False)
+            ),
+            keyword_priority_match_mode=str(
+                keyword_priority_raw.get("match_mode", "substring") or "substring"
+            )
+            .strip()
+            .lower(),
+            keyword_priority_fill_mode=str(
+                keyword_priority_raw.get("fill_mode", "fallback_file_order")
+                or "fallback_file_order"
+            )
+            .strip()
+            .lower(),
         )
+
+        if source.selection_mode not in {"file_order", "keyword_priority"}:
+            raise ValueError(
+                f"Classify question '{qid}' has invalid source.selection_mode: "
+                f"{source.selection_mode!r}"
+            )
+        if source.keyword_priority_match_mode not in {"substring", "word_boundary"}:
+            raise ValueError(
+                f"Classify question '{qid}' has invalid source.keyword_priority.match_mode: "
+                f"{source.keyword_priority_match_mode!r}"
+            )
+        if source.keyword_priority_fill_mode not in {"fallback_file_order", "matches_only"}:
+            raise ValueError(
+                f"Classify question '{qid}' has invalid source.keyword_priority.fill_mode: "
+                f"{source.keyword_priority_fill_mode!r}"
+            )
 
         questions.append(
             ClassifyQuestion(
@@ -486,16 +538,48 @@ def _snippet_id(index: int, path: Path) -> str:
     return f"s{index:02d}_{stem}"
 
 
+def _keyword_match_count(
+    text: str,
+    terms: list[str],
+    *,
+    case_sensitive: bool,
+    match_mode: str,
+) -> int:
+    if not terms or not text:
+        return 0
+
+    if match_mode == "substring":
+        haystack = text if case_sensitive else text.lower()
+        count = 0
+        for term in terms:
+            needle = term if case_sensitive else term.lower()
+            if not needle:
+                continue
+            count += haystack.count(needle)
+        return count
+
+    if match_mode == "word_boundary":
+        flags = 0 if case_sensitive else re.IGNORECASE
+        count = 0
+        for term in terms:
+            token = str(term or "").strip()
+            if not token:
+                continue
+            pattern = re.compile(rf"\b{re.escape(token)}\b", flags)
+            count += len(pattern.findall(text))
+        return count
+
+    return 0
+
+
 def collect_evidence_snippets(org_id: str, question: ClassifyQuestion) -> list[dict[str, str]]:
     pages_dir = DATA_DIR / "orgs" / str(org_id).strip() / "pages_cleaned"
     if not pages_dir.exists() or not pages_dir.is_dir():
         return []
 
-    snippets: list[dict[str, str]] = []
+    candidates: list[dict[str, object]] = []
     files = sorted(path for path in pages_dir.glob("*.md") if path.is_file())
     for index, file_path in enumerate(files, start=1):
-        if len(snippets) >= question.source.max_snippets:
-            break
         try:
             raw_text = file_path.read_text(encoding="utf-8")
         except Exception:
@@ -503,10 +587,45 @@ def collect_evidence_snippets(org_id: str, question: ClassifyQuestion) -> list[d
         text = _clean_text(raw_text)
         if len(text) < question.source.min_snippet_chars:
             continue
-        snippets.append(
+        candidates.append(
             {
                 "snippet_id": _snippet_id(index, file_path),
                 "text": text[: question.source.max_snippet_chars],
+                "_file_order": index,
+                "_match_count": _keyword_match_count(
+                    text,
+                    question.source.keyword_priority_terms,
+                    case_sensitive=question.source.keyword_priority_case_sensitive,
+                    match_mode=question.source.keyword_priority_match_mode,
+                ),
+            }
+        )
+
+    if question.source.selection_mode == "keyword_priority":
+        matched = [row for row in candidates if int(row.get("_match_count", 0) or 0) > 0]
+        unmatched = [row for row in candidates if int(row.get("_match_count", 0) or 0) <= 0]
+        matched.sort(
+            key=lambda row: (
+                -int(row.get("_match_count", 0) or 0),
+                int(row.get("_file_order", 0) or 0),
+            )
+        )
+        unmatched.sort(key=lambda row: int(row.get("_file_order", 0) or 0))
+        if question.source.keyword_priority_fill_mode == "matches_only":
+            selected = matched
+        else:
+            selected = matched + unmatched
+    else:
+        selected = sorted(candidates, key=lambda row: int(row.get("_file_order", 0) or 0))
+
+    snippets: list[dict[str, str]] = []
+    for row in selected:
+        if len(snippets) >= question.source.max_snippets:
+            break
+        snippets.append(
+            {
+                "snippet_id": str(row.get("snippet_id", "") or "").strip(),
+                "text": str(row.get("text", "") or "").strip(),
             }
         )
     return snippets
