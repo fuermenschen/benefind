@@ -6,6 +6,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pandas as pd
@@ -173,19 +174,66 @@ def _domain_name_hint(org_name: str, website_url: str) -> bool:
     return any(token in host for token in name_tokens)
 
 
-def collect_clean_content(org_id: str, *, max_files: int = 6, max_chars: int = 4000) -> str:
+_IDENTITY_PAGE_KEYWORDS_HIGH = (
+    "impressum",
+    "kontakt",
+    "contact",
+    "ueber",
+    "uber",
+    "about",
+    "verein",
+    "who-we-are",
+    "team",
+    "vorstand",
+)
+
+_IDENTITY_PAGE_KEYWORDS_LOW = (
+    "projekt",
+    "projekte",
+    "news",
+    "blog",
+    "event",
+    "veranstaltung",
+    "newsletter",
+)
+
+
+def _page_priority(path: Path) -> tuple[int, str]:
+    name = path.name.lower()
+    if any(keyword in name for keyword in _IDENTITY_PAGE_KEYWORDS_HIGH):
+        return (0, name)
+    if name.startswith("001-"):
+        return (1, name)
+    if any(keyword in name for keyword in _IDENTITY_PAGE_KEYWORDS_LOW):
+        return (3, name)
+    return (2, name)
+
+
+def _collect_clean_content(
+    org_id: str,
+    *,
+    max_files: int | None,
+    max_chars: int | None,
+) -> str:
     pages_cleaned_dir = DATA_DIR / "orgs" / org_id / "pages_cleaned"
     if not pages_cleaned_dir.exists() or not pages_cleaned_dir.is_dir():
         return ""
 
+    pages = sorted(pages_cleaned_dir.glob("*.md"), key=_page_priority)
+    if max_files is not None:
+        pages = pages[:max_files]
+
     chunks: list[str] = []
     total_chars = 0
-    for path in sorted(pages_cleaned_dir.glob("*.md"))[:max_files]:
+    for path in pages:
         try:
             text = path.read_text(encoding="utf-8")
         except Exception:
             continue
         if not text:
+            continue
+        if max_chars is None:
+            chunks.append(text)
             continue
         remaining = max_chars - total_chars
         if remaining <= 0:
@@ -195,6 +243,19 @@ def collect_clean_content(org_id: str, *, max_files: int = 6, max_chars: int = 4
         total_chars += len(clipped)
 
     return "\n\n".join(chunks)
+
+
+def collect_clean_content_for_rules(org_id: str) -> str:
+    return _collect_clean_content(org_id, max_files=None, max_chars=None)
+
+
+def collect_clean_content_for_llm(
+    org_id: str,
+    *,
+    max_files: int = 8,
+    max_chars: int = 4000,
+) -> str:
+    return _collect_clean_content(org_id, max_files=max_files, max_chars=max_chars)
 
 
 def _extract_json_object(text: str) -> dict:
@@ -310,13 +371,14 @@ def verify_discover_match(
     org_name: str,
     org_location: str,
     website_url: str,
-    content: str,
+    rules_content: str,
+    llm_content: str,
     settings: Settings,
     llm_verify_enabled: bool,
 ) -> DiscoverVerificationResult:
-    name_exact = _name_exact_match(org_name, content)
-    name_token = _name_token_match(org_name, content)
-    location_ok = _location_match(org_location, content)
+    name_exact = _name_exact_match(org_name, rules_content)
+    name_token = _name_token_match(org_name, rules_content)
+    location_ok = _location_match(org_location, rules_content)
     domain_hint = _domain_name_hint(org_name, website_url)
     rule_score = _build_rule_score(
         name_exact=name_exact,
@@ -353,7 +415,7 @@ def verify_discover_match(
         org_name=org_name,
         org_location=org_location,
         website_url=website_url,
-        content=content,
+        content=llm_content or rules_content,
         settings=settings,
     )
     auto_score = int(settings.search.discover_verify_llm_auto_confirm_score)

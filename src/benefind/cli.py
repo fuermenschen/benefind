@@ -3351,7 +3351,8 @@ def verify_discover(
     from benefind.config import DATA_DIR
     from benefind.external_api import ExternalApiAccessError
     from benefind.verify_discover import (
-        collect_clean_content,
+        collect_clean_content_for_llm,
+        collect_clean_content_for_rules,
         ensure_discover_verify_columns,
         load_clean_eligible_org_ids,
         verify_discover_match,
@@ -3538,8 +3539,9 @@ def verify_discover(
                 "llm_evidence": "",
             }
 
-        content = collect_clean_content(org_id)
-        if not content.strip():
+        rules_content = collect_clean_content_for_rules(org_id)
+        llm_content = collect_clean_content_for_llm(org_id)
+        if not rules_content.strip() and not llm_content.strip():
             return {
                 "idx": idx,
                 "status": "review_required",
@@ -3560,7 +3562,8 @@ def verify_discover(
             org_name=org_name,
             org_location=org_location,
             website_url=website_url,
-            content=content,
+            rules_content=rules_content,
+            llm_content=llm_content,
             settings=settings,
             llm_verify_enabled=llm_verify_enabled,
         )
