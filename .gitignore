@@ -39,3 +39,4 @@ data/orgs/*/
 
 # But keep .gitkeep files
 !data/**/.gitkeep
+data/classify/conclusions.json

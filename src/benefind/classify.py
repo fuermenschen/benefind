@@ -22,6 +22,8 @@ from benefind.cli_ui import (
     C_SCORE_HIGH,
     C_SCORE_LOW,
     C_SCORE_MED,
+    ask_select,
+    ask_text,
     clear,
     confirm,
     console,
@@ -34,7 +36,11 @@ from benefind.cli_ui import (
 )
 from benefind.config import CONFIG_DIR, DATA_DIR, Settings, render_prompt_template
 from benefind.csv_io import ensure_text_columns
-from benefind.exclusion_reasons import ExcludeReason
+from benefind.exclusion_reasons import (
+    EXCLUDE_REASON_OPTIONS,
+    VALID_EXCLUDE_REASON_CODES,
+    ExcludeReason,
+)
 from benefind.external_api import ExternalApiAccessError, classify_openai_access_error
 from benefind.scrape_clean import load_latest_scrape_clean_summary
 
@@ -1159,6 +1165,158 @@ def apply_review_summary(
     df.at[row_index, cols["review_result_at"]] = now
 
 
+def _effective_normalized_payload(ask_payload: dict[str, object]) -> tuple[dict[str, object], str]:
+    manual_override = ask_payload.get("manual_override", {})
+    if isinstance(manual_override, dict):
+        manual_normalized = manual_override.get("normalized", {})
+        if isinstance(manual_normalized, dict):
+            return manual_normalized, "manual_override"
+
+    normalized = ask_payload.get("normalized", {})
+    if isinstance(normalized, dict):
+        return normalized, "llm"
+    return {}, "none"
+
+
+def _format_edit_default(value: object, kind: str) -> str:
+    normalized_kind = str(kind or "").strip().lower()
+    if normalized_kind in {"string", "number"}:
+        return "" if value is None else str(value).strip()
+    if normalized_kind == "string_list":
+        if not isinstance(value, list):
+            return ""
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
+    if normalized_kind == "object_list":
+        if not isinstance(value, list):
+            return "[]"
+        return json.dumps(value, ensure_ascii=False)
+    return str(value or "").strip()
+
+
+def _parse_edit_value(raw_value: str, field_cfg: OutputFieldConfig) -> object:
+    text = str(raw_value or "").strip()
+    if field_cfg.kind == "string":
+        return text.lower() if field_cfg.lowercase else text
+    if field_cfg.kind == "number":
+        if not text:
+            raise ValueError("Number fields cannot be empty.")
+        try:
+            return float(text)
+        except ValueError as e:
+            raise ValueError(f"Invalid number: {text!r}") from e
+    if field_cfg.kind == "string_list":
+        if not text:
+            return []
+        values = [part.strip() for part in text.split(",") if part.strip()]
+        if field_cfg.lowercase:
+            values = [item.lower() for item in values]
+        if field_cfg.unique_casefold:
+            seen: set[str] = set()
+            deduped: list[str] = []
+            for item in values:
+                key = item.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(item)
+            values = deduped
+        if field_cfg.max_items is not None:
+            values = values[: field_cfg.max_items]
+        return values
+    if field_cfg.kind == "object_list":
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ValueError("Object-list fields require valid JSON array input.") from e
+        if not isinstance(parsed, list):
+            raise ValueError("Object-list fields require a JSON array.")
+        return parsed
+    raise ValueError(f"Unsupported editable field kind: {field_cfg.kind!r}")
+
+
+def _prompt_review_payload_edit(
+    *,
+    question: ClassifyQuestion,
+    current_payload: dict[str, object],
+    allowed_snippet_ids: set[str],
+) -> dict[str, object] | None:
+    if not question.output_fields:
+        print_warning("No editable output fields configured for this classify question.")
+        return None
+
+    field_map = {item.key: item for item in question.output_fields}
+    choices: list[tuple[str, str]] = []
+    for field_cfg in question.output_fields:
+        current_value = _field_value(current_payload, field_cfg.key)
+        preview = _format_edit_default(current_value, field_cfg.kind)
+        choices.append((f"{field_cfg.key} [{field_cfg.kind}] = {preview}", field_cfg.key))
+    choices.append(("Cancel", "__cancel__"))
+
+    selected_key = ask_select(
+        "Select field to update",
+        choices,
+        default_value=question.output_fields[0].key,
+    )
+    if not selected_key or selected_key == "__cancel__":
+        return None
+
+    field_cfg = field_map[selected_key]
+    current_value = current_payload.get(field_cfg.key)
+    default_text = _format_edit_default(current_value, field_cfg.kind)
+    if field_cfg.kind == "object_list":
+        prompt = (
+            f"New value for {field_cfg.key} (JSON array; empty clears)")
+    elif field_cfg.kind == "string_list":
+        prompt = f"New value for {field_cfg.key} (comma-separated; empty clears)"
+    else:
+        prompt = f"New value for {field_cfg.key}"
+    entered = ask_text(prompt, default=default_text)
+
+    try:
+        parsed_value = _parse_edit_value(entered, field_cfg)
+    except ValueError as e:
+        print_warning(str(e))
+        return None
+
+    draft = dict(current_payload)
+    draft[field_cfg.key] = parsed_value
+    try:
+        return normalize_payload(
+            draft,
+            question=question,
+            allowed_snippet_ids=allowed_snippet_ids,
+        )
+    except ValueError as e:
+        print_warning(f"Invalid update: {e}")
+        return None
+
+
+def _prompt_classify_exclusion_reason() -> tuple[ExcludeReason, str] | None:
+    choices = [
+        (f"{option.label} [{option.reason.value}]", option.reason.value)
+        for option in EXCLUDE_REASON_OPTIONS
+    ]
+    selected = ask_select(
+        "Exclude reason",
+        choices,
+        default_value=ExcludeReason.IRRELEVANT_PURPOSE.value,
+    )
+    if not selected:
+        print_warning("No exclusion reason selected.")
+        return None
+
+    reason = ExcludeReason(selected)
+    note = ""
+    if reason is ExcludeReason.OTHER:
+        note = ask_text("Reason note (required)")
+        if not str(note or "").strip():
+            print_warning("Reason note is required for OTHER.")
+            return None
+    return reason, str(note or "").strip()
+
+
 def update_classify_meta(df: pd.DataFrame) -> None:
     now = datetime.now(UTC).isoformat(timespec="seconds")
     df["_classify_version"] = "v1"
@@ -1259,7 +1417,7 @@ def review_classifications(
         stats["remaining"] = len(queue_indices)
         return stats
 
-    valid_keys = ["a", "x", "o", "w", "f", "v", "s", "q"]
+    valid_keys = ["a", "x", "u", "o", "w", "f", "v", "s", "q"]
     for pos, idx in enumerate(queue_indices, start=1):
         row = df.loc[idx]
         org_id = str(row.get("_org_id", "") or "").strip()
@@ -1283,9 +1441,9 @@ def review_classifications(
 
         artifact_path = classify_org_dir(org_id, question.id) / "ask.json"
         ask_payload = read_org_artifact(artifact_path)
-        normalized_payload = (
-            ask_payload.get("normalized", {}) if isinstance(ask_payload, dict) else {}
-        )
+        if not isinstance(ask_payload, dict):
+            ask_payload = {}
+        normalized_payload, payload_source = _effective_normalized_payload(ask_payload)
 
         auto_result = str(row.get(cols["auto_result"], "") or "-")
         auto_result_at = str(row.get(cols["auto_result_at"], "") or "")
@@ -1301,6 +1459,7 @@ def review_classifications(
         evidence = normalized_payload.get("evidence", [])
         snippets = ask_payload.get("snippets", []) if isinstance(ask_payload, dict) else []
         snippet_map: dict[str, str] = {}
+        allowed_snippet_ids: set[str] = set()
         if isinstance(snippets, list):
             for item in snippets:
                 if not isinstance(item, dict):
@@ -1309,6 +1468,9 @@ def review_classifications(
                 text = str(item.get("text", "") or "").strip()
                 if sid:
                     snippet_map[sid] = text
+                    allowed_snippet_ids.add(sid)
+        if zefix_purpose:
+            allowed_snippet_ids.add(VERIFIED_PURPOSE_SNIPPET_ID)
 
         show_full_snippets = False
 
@@ -1337,6 +1499,7 @@ def review_classifications(
                     "Review result",
                     f"[{C_MUTED}]{review_result or '-'}[/{C_MUTED}]",
                 ),
+                ("Proposal source", f"[{C_MUTED}]{payload_source}[/{C_MUTED}]"),
                 (
                     "Reviewed at",
                     f"[{C_MUTED}]{review_result_at or '-'}[/{C_MUTED}]",
@@ -1423,6 +1586,7 @@ def review_classifications(
                         [
                             ("a", "accept in scope"),
                             ("x", "mark excluded"),
+                            ("u", "update proposal"),
                             ("o", "open website"),
                             ("f", "search org on web"),
                             (
@@ -1468,6 +1632,28 @@ def review_classifications(
             if key == "v":
                 show_full_snippets = not show_full_snippets
                 continue
+            if key == "u":
+                if not normalized_payload:
+                    print_warning("No proposal payload available to edit.")
+                    continue
+                updated_payload = _prompt_review_payload_edit(
+                    question=question,
+                    current_payload=normalized_payload,
+                    allowed_snippet_ids=allowed_snippet_ids,
+                )
+                if updated_payload is None:
+                    continue
+                ask_payload["manual_override"] = {
+                    "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                    "normalized": updated_payload,
+                }
+                write_org_artifact(artifact_path, ask_payload)
+                normalized_payload = updated_payload
+                payload_source = "manual_override"
+                if save_callback is not None:
+                    save_callback()
+                print_success("Proposal updated")
+                continue
             if key == "a":
                 if not confirm("Accept as in-scope?", default=True):
                     continue
@@ -1479,6 +1665,7 @@ def review_classifications(
                         "question_id": question.id,
                         "org_id": org_id,
                         "decision": "accepted",
+                        "proposal_source": payload_source,
                     },
                 )
                 if save_callback is not None:
@@ -1487,7 +1674,11 @@ def review_classifications(
                 print_success("Accepted")
                 break
             if key == "x":
-                if not confirm("Exclude as IRRELEVANT_PURPOSE?", default=True):
+                reason_choice = _prompt_classify_exclusion_reason()
+                if reason_choice is None:
+                    continue
+                reason, note = reason_choice
+                if not confirm(f"Exclude as {reason.value}?", default=True):
                     continue
                 apply_review_summary(df, idx, question, "excluded")
                 write_org_artifact(
@@ -1497,12 +1688,15 @@ def review_classifications(
                         "question_id": question.id,
                         "org_id": org_id,
                         "decision": "excluded",
+                        "proposal_source": payload_source,
+                        "exclusion_reason": reason.value,
+                        "exclusion_reason_note": note,
                     },
                 )
                 if save_callback is not None:
                     save_callback()
                 stats["excluded"] += 1
-                print_success("Excluded")
+                print_success(f"Excluded ({reason.value})")
                 break
 
     return stats
@@ -1617,32 +1811,46 @@ def apply_conclude_updates(
         return {"applied_total": 0, "applied_auto_excluded": 0, "applied_review_excluded": 0}
 
     now = datetime.now(UTC).isoformat(timespec="seconds")
-    reason_value = ExcludeReason.IRRELEVANT_PURPOSE.value
-    current_notes = df["_excluded_reason_note"].astype(str)
-
-    df.loc[apply_mask, "_excluded_reason"] = reason_value
-    df.loc[apply_mask, "_excluded_at"] = now
-
     auto_note = f"classify:{question.id}:auto_excluded"
-    review_note = f"classify:{question.id}:review_excluded"
-
     auto_only = auto_mask & ~review_mask
     review_only = review_mask
+
     if int(auto_only.sum()) > 0:
-        blank_auto = auto_only & (current_notes.str.strip() == "")
-        non_blank_auto = auto_only & (current_notes.str.strip() != "")
-        df.loc[blank_auto, "_excluded_reason_note"] = auto_note
-        df.loc[non_blank_auto, "_excluded_reason_note"] = (
-            current_notes.loc[non_blank_auto].str.strip() + " | " + auto_note
-        )
+        for idx in list(df.index[auto_only]):
+            df.at[idx, "_excluded_reason"] = ExcludeReason.IRRELEVANT_PURPOSE.value
+            df.at[idx, "_excluded_at"] = now
+            existing_note = str(df.at[idx, "_excluded_reason_note"] or "").strip()
+            if existing_note:
+                df.at[idx, "_excluded_reason_note"] = f"{existing_note} | {auto_note}"
+            else:
+                df.at[idx, "_excluded_reason_note"] = auto_note
 
     if int(review_only.sum()) > 0:
-        blank_review = review_only & (current_notes.str.strip() == "")
-        non_blank_review = review_only & (current_notes.str.strip() != "")
-        df.loc[blank_review, "_excluded_reason_note"] = review_note
-        df.loc[non_blank_review, "_excluded_reason_note"] = (
-            current_notes.loc[non_blank_review].str.strip() + " | " + review_note
-        )
+        for idx in list(df.index[review_only]):
+            org_id = str(df.at[idx, "_org_id"] or "").strip()
+            review_payload = read_org_artifact(
+                classify_org_dir(org_id, question.id) / "review.json"
+            )
+
+            reason_value = ExcludeReason.IRRELEVANT_PURPOSE.value
+            reason_raw = str(review_payload.get("exclusion_reason", "") or "").strip().upper()
+            if reason_raw in VALID_EXCLUDE_REASON_CODES:
+                reason_value = reason_raw
+
+            note_text = str(review_payload.get("exclusion_reason_note", "") or "").strip()
+            provenance_note = f"classify:{question.id}:review_excluded:{reason_value}"
+
+            df.at[idx, "_excluded_reason"] = reason_value
+            df.at[idx, "_excluded_at"] = now
+
+            existing_note = str(df.at[idx, "_excluded_reason_note"] or "").strip()
+            parts: list[str] = []
+            if existing_note:
+                parts.append(existing_note)
+            parts.append(provenance_note)
+            if note_text:
+                parts.append(note_text)
+            df.at[idx, "_excluded_reason_note"] = " | ".join(parts)
 
     return {
         "applied_total": int(apply_mask.sum()),
@@ -1677,7 +1885,7 @@ def _conclude_example_rows(
 
     ask_payload = read_org_artifact(classify_org_dir(org_id, question.id) / "ask.json")
     route_reason = str(ask_payload.get("route_reason", "") or "").strip() or "-"
-    normalized = ask_payload.get("normalized", {}) if isinstance(ask_payload, dict) else {}
+    normalized, _ = _effective_normalized_payload(ask_payload)
     reason_raw = normalized.get("reason", "") if isinstance(normalized, dict) else ""
     reason = str(reason_raw).strip() or "-"
 

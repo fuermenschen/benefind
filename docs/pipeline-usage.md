@@ -308,13 +308,16 @@ artifacts for downstream manual analysis.
 `benefind classify` phase model:
 
 - step order is `ask -> review -> conclude`
+- review actions now include proposal updates (`u`) to correct question outputs before accept/exclude
+- review exclude (`x`) prompts for global exclusion reason (`NO_INFORMATION`, `IN_LIQUIDATION`, `NOT_EXIST`, `IRRELEVANT_PURPOSE`, `OTHER` with required note)
 - `conclude` shows per-question totals (auto accepted/excluded, review accepted/excluded, pending)
 - `conclude` supports hotkeys to inspect random examples from automatic/manual outcome buckets
 - `conclude` is blocked until both ask and review are complete for the selected question
 - only after explicit conclude confirmation are global exclusions written:
   - rows with `_classify_<question>_auto_result=auto_excluded`
   - rows with `_classify_<question>_review_result=excluded`
-  - global fields updated: `_excluded_reason=IRRELEVANT_PURPOSE`, `_excluded_reason_note`, `_excluded_at`
+  - global fields updated: `_excluded_reason`, `_excluded_reason_note`, `_excluded_at`
+  - auto-excluded rows keep `_excluded_reason=IRRELEVANT_PURPOSE`; review-excluded rows use the reason selected during classify review
 
 `benefind scrape-clean` behavior highlights:
 
