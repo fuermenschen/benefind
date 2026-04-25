@@ -50,6 +50,7 @@ except Exception:  # pragma: no cover - optional dependency
     pdfplumber = None
 
 from benefind.config import DATA_DIR, Settings
+from benefind.csv_io import read_csv_no_infer
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +180,7 @@ def _load_manifest(manifest_path: Path) -> pd.DataFrame:
         return pd.DataFrame(columns=MANIFEST_COLUMNS)
 
     try:
-        df = pd.read_csv(manifest_path, encoding="utf-8-sig")
+        df = read_csv_no_infer(manifest_path)
     except Exception:
         return pd.DataFrame(columns=MANIFEST_COLUMNS)
 

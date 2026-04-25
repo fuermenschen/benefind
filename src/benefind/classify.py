@@ -32,6 +32,7 @@ from benefind.cli_ui import (
     wait_for_key,
 )
 from benefind.config import CONFIG_DIR, DATA_DIR, Settings, render_prompt_template
+from benefind.csv_io import ensure_text_columns
 from benefind.external_api import ExternalApiAccessError, classify_openai_access_error
 from benefind.scrape_clean import load_latest_scrape_clean_summary
 
@@ -385,19 +386,11 @@ def changed_question_ids(change_map: dict[str, list[str]]) -> set[str]:
 
 def ensure_question_columns(df: pd.DataFrame, question_id: str) -> None:
     cols = question_columns(question_id)
-    for value in cols.values():
-        if value not in df.columns:
-            df[value] = ""
-        else:
-            df[value] = df[value].astype(object).where(df[value].notna(), "")
+    ensure_text_columns(df, list(cols.values()))
 
 
 def ensure_compact_classify_columns(df: pd.DataFrame) -> None:
-    for col in ["_classify_version", "_classify_last_updated_at"]:
-        if col not in df.columns:
-            df[col] = ""
-        else:
-            df[col] = df[col].astype(object).where(df[col].notna(), "")
+    ensure_text_columns(df, ["_classify_version", "_classify_last_updated_at"])
 
 
 def cleanup_legacy_classify_columns(

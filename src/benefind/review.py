@@ -35,6 +35,12 @@ from benefind.cli_ui import (
     wait_for_key,
 )
 from benefind.config import DATA_DIR, load_settings
+from benefind.csv_io import (
+    ensure_boolean_columns,
+    ensure_int_columns,
+    ensure_text_columns,
+    read_csv_no_infer,
+)
 from benefind.exclusion_reasons import (
     EXCLUDE_REASON_OPTIONS,
     ExcludeReason,
@@ -241,21 +247,18 @@ def _ensure_scrape_readiness_columns(df: pd.DataFrame) -> pd.DataFrame:
         if column not in df.columns:
             df[column] = default
 
-    # Normalize stale marker to bool for consistent downstream checks.
-    df["_scrape_requires_reprepare"] = df["_scrape_requires_reprepare"].apply(
-        lambda value: str(value or "").strip().lower() in {"1", "true", "yes", "y"}
-    )
-
-    # Keep readiness text columns writable as plain object dtypes.
-    for col in [
+    ensure_text_columns(
+        df,
+        [
         "_scrape_input_signature",
         "_scrape_signature_checked_at",
         "_scrape_readiness_status",
         "_scrape_readiness_reason",
         "_scrape_readiness_note",
         "_scrape_readiness_reviewed_at",
-    ]:
-        df[col] = df[col].astype(object).where(df[col].notna(), "")
+        ],
+    )
+    ensure_boolean_columns(df, ["_scrape_requires_reprepare"], default=False)
 
     df["_scrape_readiness_status"] = df["_scrape_readiness_status"].apply(
         lambda value: "" if pd.isna(value) else str(value).strip().lower()
@@ -408,7 +411,7 @@ def _exclude_org_in_websites(
 
 
 def _load_latest_websites_df(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path, encoding="utf-8-sig")
+    df = read_csv_no_infer(path)
     if "_org_id" not in df.columns:
         raise ValueError("Live websites CSV missing _org_id")
 
@@ -420,18 +423,9 @@ def _load_latest_websites_df(path: Path) -> pd.DataFrame:
         "_website_origin",
         "_website_url_norm_reviewed_at",
     ]
-    for column in string_columns:
-        if column not in df.columns:
-            df[column] = ""
+    ensure_text_columns(df, string_columns)
 
-    for column in string_columns:
-        # Keep writable object dtype so interactive assignments never fail due to
-        # strict inferred dtypes (float/string extension types from CSV inference).
-        df[column] = df[column].astype(object).where(df[column].notna(), "")
-
-    if "_website_needs_review" not in df.columns:
-        df["_website_needs_review"] = False
-    df["_website_needs_review"] = df["_website_needs_review"].apply(_is_true)
+    ensure_boolean_columns(df, ["_website_needs_review"], default=False)
 
     df = df.drop_duplicates(subset="_org_id", keep="last")
     return df
@@ -510,7 +504,7 @@ def _clear_classify_columns_for_org(websites_df: pd.DataFrame, org_id: str) -> p
 
 
 def _load_latest_prep_df(path: Path) -> pd.DataFrame:
-    prep_df = pd.read_csv(path, encoding="utf-8-sig")
+    prep_df = read_csv_no_infer(path)
     if "_org_id" not in prep_df.columns:
         raise ValueError("Scrape prep CSV missing _org_id")
     prep_df = _ensure_scrape_readiness_columns(prep_df)
@@ -688,16 +682,14 @@ def _ensure_scrape_quality_columns(df: pd.DataFrame) -> pd.DataFrame:
         "_scrape_quality_note",
         "_scrape_quality_reviewed_at",
     ]
-    for column in text_columns:
-        df[column] = df[column].astype(object).where(df[column].notna(), "")
+    ensure_text_columns(df, text_columns)
 
     numeric_columns = [
         "_scrape_quality_total_pages",
         "_scrape_quality_low_pages",
         "_scrape_quality_success_pages",
     ]
-    for column in numeric_columns:
-        df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0).astype(int)
+    ensure_int_columns(df, numeric_columns, default=0)
 
     return df
 
@@ -797,7 +789,7 @@ def _build_scrape_quality_candidates(websites_df: pd.DataFrame) -> pd.DataFrame:
             continue
 
         try:
-            manifest_df = pd.read_csv(manifest_path, encoding="utf-8-sig")
+            manifest_df = read_csv_no_infer(manifest_path)
         except Exception:
             rows.append(
                 {
@@ -977,7 +969,7 @@ def review_scrape_quality() -> dict[str, int]:
         return {"resolved": 0, "accepted_as_is": 0, "excluded": 0, "remaining": 0}
 
     if quality_path.exists():
-        existing_df = pd.read_csv(quality_path, encoding="utf-8-sig")
+        existing_df = read_csv_no_infer(quality_path)
     else:
         existing_df = pd.DataFrame()
     existing_df = _ensure_scrape_quality_columns(existing_df)
@@ -1040,7 +1032,7 @@ def review_scrape_quality() -> dict[str, int]:
 
         while True:
             websites_df = _load_latest_websites_df(websites_path)
-            quality_df = pd.read_csv(quality_path, encoding="utf-8-sig")
+            quality_df = read_csv_no_infer(quality_path)
             quality_df = _ensure_scrape_quality_columns(quality_df)
             quality_df = quality_df.drop_duplicates(subset="_org_id", keep="last")
 
@@ -1219,7 +1211,7 @@ def review_scrape_quality() -> dict[str, int]:
                 manifest_path = DATA_DIR / "orgs" / org_id / "scrape" / "manifest.csv"
                 if manifest_path.exists():
                     try:
-                        manifest_df = pd.read_csv(manifest_path, encoding="utf-8-sig")
+                        manifest_df = read_csv_no_infer(manifest_path)
                     except Exception as e:
                         flagged_after_retry = True
                         retry_detail = f"manifest_read_error:{type(e).__name__}"
@@ -1269,7 +1261,7 @@ def review_scrape_quality() -> dict[str, int]:
         if quit_requested:
             break
 
-    final_df = pd.read_csv(quality_path, encoding="utf-8-sig")
+    final_df = read_csv_no_infer(quality_path)
     final_df = _ensure_scrape_quality_columns(final_df)
     remaining_mask = ~final_df["_scrape_quality_status"].astype(str).str.strip().str.lower().isin(
         {"resolved", "excluded"}
@@ -1326,7 +1318,7 @@ def _save_location_decisions(
 
     updates_df = pd.DataFrame(rows)
     if LOCATION_DECISIONS_PATH.exists():
-        existing = pd.read_csv(LOCATION_DECISIONS_PATH, encoding="utf-8-sig")
+        existing = read_csv_no_infer(LOCATION_DECISIONS_PATH)
     else:
         existing = pd.DataFrame(columns=updates_df.columns)
 
@@ -1557,18 +1549,18 @@ def review_locations() -> dict[str, int]:
         console.print("Run [bold]benefind filter[/bold] first.")
         return {"included": 0, "excluded": 0, "remaining": 0}
 
-    review_df = pd.read_csv(review_path, encoding="utf-8-sig")
+    review_df = read_csv_no_infer(review_path)
     if review_df.empty:
         console.print("[green]No organizations need location review.[/green]")
         return {"included": 0, "excluded": 0, "remaining": 0}
 
     matched_df = (
-        pd.read_csv(matched_path, encoding="utf-8-sig")
+        read_csv_no_infer(matched_path)
         if matched_path.exists()
         else pd.DataFrame(columns=review_df.columns)
     )
     excluded_df = (
-        pd.read_csv(excluded_path, encoding="utf-8-sig")
+        read_csv_no_infer(excluded_path)
         if excluded_path.exists()
         else pd.DataFrame(columns=review_df.columns)
     )
@@ -1676,7 +1668,7 @@ def review_websites() -> None:
         console.print("Run [bold]benefind discover[/bold] first.")
         return
 
-    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    df = read_csv_no_infer(input_path)
     required_columns = [
         "_website_url",
         "_website_confidence",
@@ -1970,7 +1962,7 @@ def review_discover_mismatches() -> dict[str, int]:
         console.print("Run [bold]benefind verify-discover[/bold] first.")
         return {"accepted": 0, "url_changed": 0, "excluded": 0, "remaining": 0}
 
-    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    df = read_csv_no_infer(input_path)
     required_columns = [
         "_website_url",
         "_website_url_final",
@@ -1980,12 +1972,7 @@ def review_discover_mismatches() -> dict[str, int]:
         "_excluded_reason_note",
         "_excluded_at",
     ]
-    for col in required_columns:
-        if col not in df.columns:
-            df[col] = ""
-
-    for col in required_columns:
-        df[col] = df[col].astype(object).where(df[col].notna(), "")
+    ensure_text_columns(df, required_columns)
     df = ensure_discover_verify_columns(df)
 
     # Manual URL entries/corrections are user-confirmed and should never
@@ -2239,7 +2226,7 @@ def review_url_normalization(
         console.print("Run [bold]benefind normalize-urls[/bold] first.")
         return {"applied_normalized": 0, "kept_original": 0, "remaining": 0, "excluded": 0}
 
-    df = pd.read_csv(file_path, encoding="utf-8-sig")
+    df = read_csv_no_infer(file_path)
     if df.empty:
         console.print("[yellow]Normalization audit CSV is empty. Nothing to review.[/yellow]")
         return {"applied_normalized": 0, "kept_original": 0, "remaining": 0, "excluded": 0}
@@ -2855,11 +2842,8 @@ def _ensure_zefix_columns(df: pd.DataFrame) -> pd.DataFrame:
         "_zefix_checked_at",
         "_zefix_error",
     ]
-    for column in text_columns:
-        df[column] = df[column].astype(object).where(df[column].notna(), "")
-
-    df["_zefix_match_count"] = pd.to_numeric(df["_zefix_match_count"], errors="coerce").fillna(0)
-    df["_zefix_match_count"] = df["_zefix_match_count"].astype(int)
+    ensure_text_columns(df, text_columns)
+    ensure_int_columns(df, ["_zefix_match_count"], default=0)
     return df
 
 

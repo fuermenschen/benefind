@@ -13,6 +13,13 @@ from pathlib import Path
 import pandas as pd
 
 from benefind.config import DATA_DIR, Settings
+from benefind.csv_io import (
+    ensure_boolean_columns,
+    ensure_float_columns,
+    ensure_int_columns,
+    ensure_text_columns,
+    read_csv_no_infer,
+)
 
 
 def scrape_clean_summary_path() -> Path:
@@ -215,8 +222,7 @@ def _ensure_scrape_clean_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
         "_scrape_source_manifest_signature",
         "_scrape_clean_processed_at",
     ]
-    for column in text_columns:
-        df[column] = df[column].astype(object).where(df[column].notna(), "")
+    ensure_text_columns(df, text_columns)
 
     numeric_columns = [
         "_scrape_clean_pages_total",
@@ -228,15 +234,10 @@ def _ensure_scrape_clean_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
         "_scrape_clean_usable_chars",
         "_scrape_clean_min_segment_chars",
     ]
-    for column in numeric_columns:
-        df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0).astype(int)
+    ensure_int_columns(df, numeric_columns, default=0)
 
-    df["_scrape_clean_min_duplicate_page_ratio"] = pd.to_numeric(
-        df["_scrape_clean_min_duplicate_page_ratio"], errors="coerce"
-    ).fillna(0.0)
-    df["_scrape_clean_retain_one_duplicate_copy"] = df[
-        "_scrape_clean_retain_one_duplicate_copy"
-    ].apply(lambda value: str(value).strip().lower() in {"1", "true", "yes", "y"})
+    ensure_float_columns(df, ["_scrape_clean_min_duplicate_page_ratio"], default=0.0)
+    ensure_boolean_columns(df, ["_scrape_clean_retain_one_duplicate_copy"], default=False)
 
     return df[SCRAPE_CLEAN_SUMMARY_COLUMNS]
 
@@ -246,7 +247,7 @@ def load_latest_scrape_clean_summary(path: Path | None = None) -> pd.DataFrame:
     if not effective_path.exists():
         return pd.DataFrame(columns=SCRAPE_CLEAN_SUMMARY_COLUMNS)
     try:
-        df = pd.read_csv(effective_path, encoding="utf-8-sig")
+        df = read_csv_no_infer(effective_path)
     except Exception:
         return pd.DataFrame(columns=SCRAPE_CLEAN_SUMMARY_COLUMNS)
     df = _ensure_scrape_clean_summary_columns(df)
@@ -326,7 +327,7 @@ def clean_scraped_pages_for_org(
     summary_row["_scrape_source_manifest_mtime"] = str(int(scrape_manifest_path.stat().st_mtime_ns))
 
     try:
-        scrape_manifest_df = pd.read_csv(scrape_manifest_path, encoding="utf-8-sig")
+        scrape_manifest_df = read_csv_no_infer(scrape_manifest_path)
     except Exception as exc:
         summary_row["_scrape_clean_status"] = "manifest_unreadable"
         summary_row["_scrape_clean_issue"] = "manifest_unreadable"

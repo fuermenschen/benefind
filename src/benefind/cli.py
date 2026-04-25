@@ -42,6 +42,7 @@ from benefind.cli_ui import (
     print_warning,
 )
 from benefind.config import PROJECT_ROOT, load_settings
+from benefind.csv_io import ensure_text_columns, read_csv_no_infer
 from benefind.exclusion_reasons import has_exclusion_reason, has_exclusion_reason_series
 
 # Load .env file from project root before anything else
@@ -583,14 +584,14 @@ def discover(
         )
         return int(((no_website_mask | needs_review_mask) & ~excluded_mask).sum())
 
-    input_df = pd.read_csv(input_path, encoding="utf-8-sig")
+    input_df = read_csv_no_infer(input_path)
     if "_org_id" not in input_df.columns:
         raise typer.BadParameter(
             "Input CSV has no _org_id column. Re-run 'benefind parse' then 'benefind filter'."
         )
 
     if output_path.exists():
-        existing_df = pd.read_csv(output_path, encoding="utf-8-sig")
+        existing_df = read_csv_no_infer(output_path)
         if "_org_id" not in existing_df.columns:
             raise typer.BadParameter(
                 "Existing discovered CSV has no _org_id column. Run discover with --refresh."
@@ -1057,7 +1058,7 @@ def add_zefix_information(
         raise typer.Exit(code=1)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    base_df = pd.read_csv(input_path, encoding="utf-8-sig")
+    base_df = read_csv_no_infer(input_path)
     if base_df.empty:
         console.print("[yellow]Input CSV is empty. Nothing to enrich.[/yellow]")
         return
@@ -1101,7 +1102,7 @@ def add_zefix_information(
             base_df[col] = pd.NA
 
     if output_path.exists() and output_path.resolve() != input_path.resolve() and not refresh:
-        existing_df = pd.read_csv(output_path, encoding="utf-8-sig")
+        existing_df = read_csv_no_infer(output_path)
         if "_org_id" in existing_df.columns:
             existing_df = existing_df.drop_duplicates(subset="_org_id", keep="last")
             existing_result_columns = [c for c in result_columns if c in existing_df.columns]
@@ -1395,8 +1396,6 @@ def guess_legal_form(
     """Guess legal form from organization name when ZEFIX has no entry."""
     import re
 
-    import pandas as pd
-
     from benefind.config import DATA_DIR
 
     settings = load_settings()
@@ -1410,7 +1409,7 @@ def guess_legal_form(
         raise typer.Exit(code=1)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    df = read_csv_no_infer(input_path)
     if df.empty:
         console.print("[yellow]Input CSV is empty. Nothing to process.[/yellow]")
         return
@@ -1600,7 +1599,7 @@ def prepare_scraping(
         console.print("Run [bold]benefind discover[/bold] first or pass [bold]--input[/bold].")
         raise typer.Exit(code=1)
 
-    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    df = read_csv_no_infer(input_path)
     if "_org_id" not in df.columns:
         raise typer.BadParameter(
             "Input CSV has no _org_id column. Re-run 'benefind parse' then 'benefind filter'."
@@ -2054,7 +2053,7 @@ def scrape(
         )
         raise typer.Exit(code=1)
 
-    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    df = read_csv_no_infer(input_path)
     required_columns = {"_org_id", "_org_name", "_scrape_prep_status", "_scrape_targets_file"}
     if not required_columns.issubset(df.columns):
         raise typer.BadParameter(
@@ -2103,7 +2102,7 @@ def scrape(
     excluded_org_ids: set[str] = set()
     live_websites_path = DATA_DIR / "filtered" / "organizations_with_websites.csv"
     if live_websites_path.exists():
-        live_df = pd.read_csv(live_websites_path, encoding="utf-8-sig")
+        live_df = read_csv_no_infer(live_websites_path)
         if "_org_id" not in live_df.columns:
             raise typer.BadParameter(
                 "Live websites CSV has no _org_id column. "
@@ -2282,7 +2281,7 @@ def scrape(
                     prepare_scraping_batch,
                 )
 
-                prepare_live_df = pd.read_csv(live_websites_path, encoding="utf-8-sig")
+                prepare_live_df = read_csv_no_infer(live_websites_path)
                 if "_org_id" not in prepare_live_df.columns:
                     print_error("Cannot rerun prepare: live websites CSV has no _org_id column.")
                     raise typer.Exit(code=1)
@@ -2621,7 +2620,6 @@ def normalize_urls(
     ),
 ) -> None:
     """Normalize discovered URLs and build a mandatory review queue for non-root paths."""
-    import pandas as pd
 
     from benefind.config import DATA_DIR
     from benefind.prepare_scraping import _build_scope, _normalize_url
@@ -2636,7 +2634,7 @@ def normalize_urls(
 
     output_path = output_file or input_path
 
-    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    df = read_csv_no_infer(input_path)
     if df.empty:
         console.print("[yellow]Input CSV is empty. Nothing to normalize.[/yellow]")
         return
@@ -2779,7 +2777,7 @@ def normalize_urls(
     if legacy_label_col not in historical_df.columns:
         historical_path = input_path.with_name(f"{input_path.stem}_url_normalized.csv")
         if historical_path.exists():
-            historical_df = pd.read_csv(historical_path, encoding="utf-8-sig")
+            historical_df = read_csv_no_infer(historical_path)
 
     if {legacy_label_col, reason_col, column}.issubset(historical_df.columns):
         labeled = historical_df.copy()
@@ -3029,8 +3027,8 @@ def normalize_urls(
     df.to_csv(temp_path, index=False, encoding="utf-8-sig")
     temp_path.replace(output_path)
 
-    changed_count = int(df[changed_col].sum())
-    review_needed_count = int(df[review_needed_col].sum())
+    changed_count = int(df[changed_col].apply(_is_truthy_text).sum())
+    review_needed_count = int(df[review_needed_col].apply(_is_truthy_text).sum())
     confidence_counts = df[confidence_col].astype(str).str.strip().value_counts().to_dict()
 
     print_summary(
@@ -3076,7 +3074,7 @@ def normalize_urls_report(
         print_error(f"Input file not found: {input_file}")
         raise typer.Exit(code=1)
 
-    df = pd.read_csv(input_file, encoding="utf-8-sig")
+    df = read_csv_no_infer(input_file)
     changed_col = f"{column}_changed"
     reason_col = f"{column}_normalization_reason"
     review_needed_col = f"{column}_review_needed"
@@ -3112,7 +3110,7 @@ def normalize_urls_report(
         "URL Normalization Queue Report",
         [
             ("Rows", len(df)),
-            ("Changed (heuristic)", int(df[changed_col].sum())),
+            ("Changed (heuristic)", int(df[changed_col].apply(_is_truthy_text).sum())),
             ("Needs review", int(df[review_needed_col].apply(_is_truthy_text).sum())),
             ("Pending review", int(unresolved_mask.sum())),
             ("Use normalized", int(decision_counts.get("use_normalized", 0))),
@@ -3193,7 +3191,7 @@ def scrape_clean(
         )
         raise typer.Exit(code=1)
 
-    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    df = read_csv_no_infer(input_path)
     if "_org_id" not in df.columns:
         raise typer.BadParameter("Input CSV missing _org_id.")
 
@@ -3346,7 +3344,6 @@ def verify_discover(
     ),
 ) -> None:
     """Verify discover results against scraped cleaned content (false-positive gate)."""
-    import pandas as pd
 
     from benefind.config import DATA_DIR
     from benefind.external_api import ExternalApiAccessError
@@ -3376,7 +3373,7 @@ def verify_discover(
         print_error(f"Input file not found: {input_path}")
         raise typer.Exit(code=1)
 
-    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    df = read_csv_no_infer(input_path)
     if df.empty:
         console.print("[yellow]Input CSV is empty. Nothing to verify.[/yellow]")
         return
@@ -3392,12 +3389,10 @@ def verify_discover(
         default="",
     )
 
-    for col in ["_website_url", "_website_url_final", "_excluded_reason", "_website_origin"]:
-        if col not in df.columns:
-            df[col] = ""
-
-    for col in ["_website_url", "_website_url_final", "_excluded_reason", "_website_origin"]:
-        df[col] = df[col].astype(object).where(df[col].notna(), "")
+    ensure_text_columns(
+        df,
+        ["_website_url", "_website_url_final", "_excluded_reason", "_website_origin"],
+    )
 
     df = ensure_discover_verify_columns(df)
 
@@ -3717,7 +3712,6 @@ def subset(
     ),
 ) -> None:
     """Create a small reproducible subset CSV for workflow testing."""
-    import pandas as pd
 
     from benefind.config import DATA_DIR
 
@@ -3747,7 +3741,7 @@ def subset(
         print_error(f"Input file not found: {input_path}")
         raise typer.Exit(code=1)
 
-    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    df = read_csv_no_infer(input_path)
     if df.empty:
         console.print("[yellow]Input CSV is empty. Nothing to sample.[/yellow]")
         return
@@ -3840,8 +3834,8 @@ def extend(
         console.print("Create an initial subset first with [bold]benefind subset[/bold].")
         raise typer.Exit(code=1)
 
-    full_df = pd.read_csv(input_path, encoding="utf-8-sig")
-    subset_df = pd.read_csv(output_path, encoding="utf-8-sig")
+    full_df = read_csv_no_infer(input_path)
+    subset_df = read_csv_no_infer(output_path)
 
     if full_df.empty:
         console.print("[yellow]Full source CSV is empty. Nothing to extend.[/yellow]")
@@ -4332,18 +4326,14 @@ def classify(
         raise typer.Exit(code=1)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    base_df = pd.read_csv(input_path, encoding="utf-8-sig")
+    base_df = read_csv_no_infer(input_path)
     if base_df.empty:
         console.print("[yellow]Input CSV is empty. Nothing to classify.[/yellow]")
         return
     if "_org_id" not in base_df.columns:
         raise typer.BadParameter("Input CSV has no _org_id column.")
 
-    for col in ["_excluded_reason", "_excluded_reason_note", "_excluded_at"]:
-        if col not in base_df.columns:
-            base_df[col] = ""
-        else:
-            base_df[col] = base_df[col].astype(object).where(base_df[col].notna(), "")
+    ensure_text_columns(base_df, ["_excluded_reason", "_excluded_reason_note", "_excluded_at"])
 
     name_column = _detect_first_column(list(base_df.columns), NAME_COLUMN_CANDIDATES, default="")
     if not name_column:

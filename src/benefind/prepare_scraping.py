@@ -28,6 +28,7 @@ from bs4 import BeautifulSoup
 from robotexclusionrulesparser import RobotExclusionRulesParser
 
 from benefind.config import DATA_DIR, Settings, load_url_scoring_config
+from benefind.csv_io import ensure_text_columns, read_csv_no_infer
 
 logger = logging.getLogger(__name__)
 
@@ -1366,12 +1367,11 @@ def write_org_targets(org_id: str, targets: list[dict]) -> Path:
 
 def load_org_targets(targets_file: Path) -> list[str]:
     """Load prepared URLs from a per-organization target CSV."""
-    import pandas as pd
 
     if not targets_file.exists():
         return []
     try:
-        df = pd.read_csv(targets_file, encoding="utf-8-sig")
+        df = read_csv_no_infer(targets_file)
     except Exception:
         return []
     if "_prepared_url" not in df.columns:
@@ -1381,13 +1381,12 @@ def load_org_targets(targets_file: Path) -> list[str]:
 
 def load_prepare_summary(summary_path: Path) -> tuple[list[dict], set[str]]:
     """Load existing summary rows and return rows + known _org_id set."""
-    import pandas as pd
 
     if not summary_path.exists():
         return [], set()
 
     try:
-        existing_df = pd.read_csv(summary_path, encoding="utf-8-sig")
+        existing_df = read_csv_no_infer(summary_path)
     except Exception:
         return [], set()
 
@@ -1395,9 +1394,7 @@ def load_prepare_summary(summary_path: Path) -> tuple[list[dict], set[str]]:
         return [], set()
 
     existing_df = existing_df.drop_duplicates(subset="_org_id", keep="last")
-    for column in SUMMARY_COLUMNS:
-        if column not in existing_df.columns:
-            existing_df[column] = ""
+    ensure_text_columns(existing_df, SUMMARY_COLUMNS)
     existing_df = existing_df[SUMMARY_COLUMNS]
     rows = existing_df.to_dict("records")
     org_ids = {

@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import pandas as pd
 
 from benefind.config import DATA_DIR, Settings, render_prompt_template
+from benefind.csv_io import ensure_boolean_columns, ensure_int_columns, ensure_text_columns
 from benefind.external_api import ExternalApiAccessError, classify_openai_access_error
 from benefind.scrape_clean import load_latest_scrape_clean_summary
 
@@ -36,40 +37,12 @@ DISCOVER_VERIFY_BOOL_OPTIONAL_COLUMNS = ["_discover_verify_llm_belongs"]
 DISCOVER_VERIFY_INT_COLUMNS = ["_discover_verify_score", "_discover_verify_llm_score"]
 
 
-def _bool_or_none(value: object) -> bool | None:
-    if pd.isna(value):
-        return None
-    if isinstance(value, bool):
-        return value
-    text = str(value or "").strip().lower()
-    if text in {"1", "true", "yes", "y"}:
-        return True
-    if text in {"0", "false", "no", "n"}:
-        return False
-    return None
-
-
 def ensure_discover_verify_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Ensure discover-verify columns exist with explicit, writable dtypes."""
-    for column in DISCOVER_VERIFY_TEXT_COLUMNS:
-        if column not in df.columns:
-            df[column] = ""
-        df[column] = df[column].astype(object).where(df[column].notna(), "")
-
-    for column in DISCOVER_VERIFY_BOOL_COLUMNS:
-        if column not in df.columns:
-            df[column] = pd.NA
-        df[column] = df[column].map(_bool_or_none).astype("boolean")
-
-    for column in DISCOVER_VERIFY_BOOL_OPTIONAL_COLUMNS:
-        if column not in df.columns:
-            df[column] = pd.NA
-        df[column] = df[column].map(_bool_or_none).astype("boolean")
-
-    for column in DISCOVER_VERIFY_INT_COLUMNS:
-        if column not in df.columns:
-            df[column] = pd.NA
-        df[column] = pd.to_numeric(df[column], errors="coerce").astype("Int64")
+    ensure_text_columns(df, DISCOVER_VERIFY_TEXT_COLUMNS)
+    ensure_boolean_columns(df, DISCOVER_VERIFY_BOOL_COLUMNS)
+    ensure_boolean_columns(df, DISCOVER_VERIFY_BOOL_OPTIONAL_COLUMNS)
+    ensure_int_columns(df, DISCOVER_VERIFY_INT_COLUMNS)
 
     return df
 

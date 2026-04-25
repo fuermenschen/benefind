@@ -17,6 +17,7 @@ import pandas as pd
 from thefuzz import fuzz
 
 from benefind.config import DATA_DIR, Settings
+from benefind.csv_io import read_csv_no_infer
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def _detect_first_column(columns: list[str], candidates: list[str], default: str
 def _load_location_decisions(path: Path = LOCATION_DECISIONS_PATH) -> dict[str, str]:
     if not path.exists():
         return {}
-    df = pd.read_csv(path, encoding="utf-8-sig")
+    df = read_csv_no_infer(path)
     required = {"decision_key", "decision"}
     if not required.issubset(df.columns):
         return {}
@@ -176,7 +177,7 @@ def filter_organizations(
     Returns:
         Tuple of (matched, review_needed, excluded) DataFrames.
     """
-    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    df = read_csv_no_infer(input_path)
     logger.info("Loaded %d organizations from %s", len(df), input_path)
 
     if location_column not in df.columns:
