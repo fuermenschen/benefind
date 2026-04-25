@@ -583,7 +583,47 @@ def discover(
         )
         return int(((no_website_mask | needs_review_mask) & ~excluded_mask).sum())
 
-    base_df = pd.read_csv(input_path, encoding="utf-8-sig")
+    input_df = pd.read_csv(input_path, encoding="utf-8-sig")
+    if "_org_id" not in input_df.columns:
+        raise typer.BadParameter(
+            "Input CSV has no _org_id column. Re-run 'benefind parse' then 'benefind filter'."
+        )
+
+    if output_path.exists():
+        existing_df = pd.read_csv(output_path, encoding="utf-8-sig")
+        if "_org_id" not in existing_df.columns:
+            raise typer.BadParameter(
+                "Existing discovered CSV has no _org_id column. Run discover with --refresh."
+            )
+
+        existing_df = existing_df.copy().drop_duplicates(subset="_org_id", keep="last")
+        input_latest = input_df.copy().drop_duplicates(subset="_org_id", keep="last")
+        if refresh:
+            # Refresh should honor the current input set only, while keeping
+            # non-input columns from the existing websites file for those rows.
+            extra_cols = [
+                col
+                for col in existing_df.columns
+                if col != "_org_id" and col not in input_latest.columns
+            ]
+            if extra_cols:
+                existing_extra = existing_df[["_org_id", *extra_cols]].copy()
+                base_df = input_latest.merge(existing_extra, on="_org_id", how="left")
+            else:
+                base_df = input_latest.copy()
+        else:
+            existing_ids = {
+                str(value).strip()
+                for value in existing_df["_org_id"].tolist()
+                if str(value).strip()
+            }
+            new_rows_mask = ~input_latest["_org_id"].astype(str).str.strip().isin(existing_ids)
+            new_rows_df = input_latest[new_rows_mask].copy()
+
+            base_df = pd.concat([existing_df, new_rows_df], ignore_index=True, sort=False)
+    else:
+        base_df = input_df.copy()
+
     if base_df.empty:
         console.print("[yellow]No organizations found in input file. Nothing to discover.[/yellow]")
         return
@@ -594,10 +634,6 @@ def discover(
     )
     if not name_column:
         raise typer.BadParameter("Could not detect organization name column in input CSV.")
-    if "_org_id" not in base_df.columns:
-        raise typer.BadParameter(
-            "Input CSV has no _org_id column. Re-run 'benefind parse' then 'benefind filter'."
-        )
 
     location_column = _detect_first_column(
         list(base_df.columns),
@@ -626,6 +662,24 @@ def discover(
         if col not in base_df.columns:
             base_df[col] = pd.NA
 
+    refresh_reset_columns = [
+        "_website_url",
+        "_website_confidence",
+        "_website_source",
+        "_website_needs_review",
+        "_website_origin",
+        "_website_score",
+        "_website_score_gap",
+        "_website_llm_url",
+        "_website_llm_agrees",
+        "_website_decision_stage",
+        "_discovered_at",
+    ]
+    if refresh:
+        for col in refresh_reset_columns:
+            if col in base_df.columns:
+                base_df[col] = pd.NA
+
     if output_path.exists() and refresh:
         if interactive:
             console.print(
@@ -641,29 +695,6 @@ def discover(
                 return
         else:
             console.print("[yellow]Refresh enabled; recomputing all discovery results.[/yellow]")
-
-    if output_path.exists() and not refresh:
-        existing_df = pd.read_csv(output_path, encoding="utf-8-sig")
-        if "_org_id" not in existing_df.columns:
-            raise typer.BadParameter(
-                "Existing discovered CSV has no _org_id column. Run discover with --refresh."
-            )
-
-        existing_df = existing_df.copy()
-        existing_df = existing_df.drop_duplicates(subset="_org_id", keep="last")
-
-        existing_result_columns = [c for c in result_columns if c in existing_df.columns]
-        existing_subset = existing_df[["_org_id", *existing_result_columns]].rename(
-            columns={c: f"{c}_existing" for c in existing_result_columns}
-        )
-
-        base_df = base_df.copy()
-        base_df = base_df.merge(existing_subset, on="_org_id", how="left")
-
-        for col in existing_result_columns:
-            existing_col = f"{col}_existing"
-            base_df[col] = base_df[col].where(~is_blank(base_df[col]), base_df[existing_col])
-            base_df = base_df.drop(columns=[existing_col])
 
     excluded_mask = has_exclusion_reason_series(base_df["_excluded_reason"])
     pending_mask = is_blank(base_df["_website_confidence"]) & ~excluded_mask
@@ -1970,6 +2001,7 @@ def scrape(
 
     settings = load_settings()
     _setup_logging(settings.log_level)
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
     scrape_logger = logging.getLogger("benefind.scrape")
     if verbose:
         scrape_logger.setLevel(logging.INFO)
@@ -2238,6 +2270,90 @@ def scrape(
         if stale_preview:
             details = "\n".join(f"{org_id}: {reasons}" for org_id, reasons in stale_preview)
             console.print(make_panel(details, "Stale org preview"))
+
+        if interactive:
+            if confirm(
+                "Rerun prepare-scraping now for these stale organizations?",
+                default=True,
+            ):
+                from benefind.prepare_scraping import (
+                    PrepareCheckpointWriter,
+                    load_prepare_summary,
+                    prepare_scraping_batch,
+                )
+
+                prepare_live_df = pd.read_csv(live_websites_path, encoding="utf-8-sig")
+                if "_org_id" not in prepare_live_df.columns:
+                    print_error("Cannot rerun prepare: live websites CSV has no _org_id column.")
+                    raise typer.Exit(code=1)
+
+                prepare_live_df = prepare_live_df.drop_duplicates(subset="_org_id", keep="last")
+                if "_excluded_reason" in prepare_live_df.columns:
+                    prepare_live_df = prepare_live_df[
+                        ~has_exclusion_reason_series(prepare_live_df["_excluded_reason"])
+                    ].copy()
+
+                stale_set = set(unique_stale_org_ids)
+                stale_records_df = prepare_live_df[
+                    prepare_live_df["_org_id"].astype(str).str.strip().isin(stale_set)
+                ].copy()
+
+                if stale_records_df.empty:
+                    print_warning(
+                        "No active stale organizations available for automatic prepare rerun."
+                    )
+                    raise typer.Exit(code=1)
+
+                prepare_name_column = _detect_first_column(
+                    list(stale_records_df.columns),
+                    NAME_COLUMN_CANDIDATES,
+                )
+                if not prepare_name_column:
+                    stale_records_df = stale_records_df.copy()
+                    stale_records_df["_org_name"] = stale_records_df["_org_id"].astype(str)
+                    prepare_name_column = "_org_name"
+
+                existing_rows, _ = load_prepare_summary(input_path)
+                writer = PrepareCheckpointWriter(input_path, existing_rows=existing_rows)
+                rerun_summaries = prepare_scraping_batch(
+                    stale_records_df.to_dict("records"),
+                    settings,
+                    org_id_column="_org_id",
+                    name_column=prepare_name_column,
+                    website_column="_website_url_final",
+                    on_result=lambda summary, targets: writer.upsert(summary, targets),
+                    log_progress=False,
+                )
+
+                rerun_df = pd.DataFrame(rerun_summaries)
+                ready_now = (
+                    int((rerun_df["_scrape_prep_status"] == "ready").sum())
+                    if not rerun_df.empty
+                    else 0
+                )
+                blocked_now = (
+                    int((rerun_df["_scrape_prep_status"] == "blocked").sum())
+                    if not rerun_df.empty
+                    else 0
+                )
+                no_urls_now = (
+                    int((rerun_df["_scrape_prep_status"] == "no_urls").sum())
+                    if not rerun_df.empty
+                    else 0
+                )
+
+                print_summary(
+                    "Prepare Rerun Results",
+                    [
+                        ("Organizations rerun", len(rerun_summaries)),
+                        ("Ready now", ready_now),
+                        ("Blocked now", blocked_now),
+                        ("No URLs now", no_urls_now),
+                        ("Summary CSV", str(input_path)),
+                    ],
+                )
+                print_warning("Rerun [bold]benefind scrape[/bold] to continue with updated prep.")
+                return
         raise typer.Exit(code=1)
 
     success = 0

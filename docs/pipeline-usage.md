@@ -129,6 +129,8 @@ uv run benefind filter --no-wizard
 `benefind discover` behavior highlights:
 
 - persists `data/filtered/organizations_with_websites.csv`
+- preserves existing non-discovery columns in that file on reruns and appends only new `_org_id` rows from input
+- in `--refresh` mode, recomputes discovery only for the current input `_org_id` set
 - checkpoints after each processed organization (safe resume on interruption)
 - fails fast on unrecoverable external API access issues (quota exhausted, missing key, invalid/forbidden key) and keeps checkpointed progress
 - processes pending rows only by default; use `--refresh` to recompute all
