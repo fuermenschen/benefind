@@ -500,6 +500,11 @@ def _clear_classify_columns_for_org(websites_df: pd.DataFrame, org_id: str) -> p
     classify_cols = [col for col in websites_df.columns if col.startswith("_classify_")]
     idx = websites_df[mask].index[-1]
     for col in classify_cols:
+        # Some classify columns may be inferred as numeric (e.g. float64) from CSVs
+        # with empty values. Writing "" into those dtypes raises TypeError on recent
+        # pandas versions, so normalize to object before clearing.
+        if websites_df[col].dtype != object:
+            websites_df[col] = websites_df[col].astype(object)
         websites_df.at[idx, col] = ""
     return websites_df
 
