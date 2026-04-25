@@ -1,0 +1,29 @@
+[prompt]
+id = "discover.mismatch_verify"
+description = "Verify whether discovered website content belongs to the organization"
+template = """
+You verify whether website content belongs to a Swiss nonprofit organization.
+Return JSON only with keys: belongs, score, reason.
+
+Organization: {org_name}
+Location: {org_location}
+Website URL: {website_url}
+
+Content snippets:
+{content_snippets}
+
+Rules:
+- belongs must be true only when the evidence strongly indicates this is the same organization.
+- score must be an integer from 0 to 100.
+- reason must be short and specific.
+"""
+
+[prompt.placeholders]
+org_name = "Organization name"
+org_location = "Organization location (or '-')"
+website_url = "Discovered website URL"
+content_snippets = "Representative cleaned content snippets"
+
+[prompt.response]
+format = "json_object"
+required_keys = ["belongs", "score", "reason"]

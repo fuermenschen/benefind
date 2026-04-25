@@ -49,6 +49,9 @@ Search settings are in `settings.toml` under `[search]`:
 - `firecrawl_max_results`
 - `firecrawl_timeout_seconds`
 - `firecrawl_max_retries`
+- `discover_verify_llm_enabled` (enable/disable LLM fallback in `verify-discover`)
+- `discover_verify_llm_min_score` (minimum rule score before LLM fallback is used; default `25`)
+- `discover_verify_llm_auto_confirm_score` (LLM score required for auto-confirm)
 
 Discovery query strategy:
 
@@ -82,6 +85,15 @@ Website provenance values:
 - `_website_origin=manual_llm` (user accepted LLM-proposed alternative URL)
 - `_website_origin=manual` (user-entered URL)
 - `_website_origin=manual_excluded` (excluded from downstream pipeline with reason; includes "no website exists" quick-access)
+
+Discover false-positive verification:
+
+- `benefind verify-discover` runs post-`scrape-clean` and validates whether discovered
+  website/content matches each organization.
+- deterministic rules run first; optional LLM fallback is used for borderline cases.
+- manual queue is available via `benefind review discover-mismatches`.
+- if a new URL is entered in that review, it is set immediately and downstream
+  scrape/clean/classify artifacts are reset for that org so later commands pick up the new URL.
 
 Scraping settings are in `settings.toml` under `[scraping]`:
 

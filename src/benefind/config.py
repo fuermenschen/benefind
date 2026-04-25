@@ -85,6 +85,9 @@ class SearchConfig:
     firecrawl_max_results: int = 10
     firecrawl_timeout_seconds: int = 30
     firecrawl_max_retries: int = 2
+    discover_verify_llm_enabled: bool = True
+    discover_verify_llm_min_score: int = 25
+    discover_verify_llm_auto_confirm_score: int = 80
 
 
 @dataclass

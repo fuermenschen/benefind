@@ -140,6 +140,11 @@ firecrawl_timeout_seconds = 30
 # Max retries for transient Firecrawl API errors
 firecrawl_max_retries = 2
 
+# Discover false-positive verification (post scrape-clean)
+discover_verify_llm_enabled = true
+discover_verify_llm_min_score = 25
+discover_verify_llm_auto_confirm_score = 80
+
 [llm]
 # OpenAI model to use for evaluation
 model = "gpt-4o-mini"

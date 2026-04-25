@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import webbrowser
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,6 +48,7 @@ from benefind.prepare_scraping import (
     prepare_scraping_batch,
 )
 from benefind.scrape_clean import load_latest_scrape_clean_summary
+from benefind.verify_discover import ensure_discover_verify_columns
 
 LOCATION_DECISIONS_PATH = DATA_DIR / "filtered" / "location_review_decisions.csv"
 NAME_COLUMN_CANDIDATES = [
@@ -454,6 +456,43 @@ def _upsert_websites_row(
 def _save_websites_df(websites_df: pd.DataFrame, path: Path) -> None:
     deduped = websites_df.drop_duplicates(subset="_org_id", keep="last")
     _save_csv_atomic(deduped, path)
+
+
+def _reset_org_post_discover_state(org_id: str) -> tuple[int, int]:
+    """Reset org artifacts that depend on discovered URL/content."""
+    org_id_norm = str(org_id or "").strip()
+    if not org_id_norm:
+        return 0, 0
+
+    org_dir = DATA_DIR / "orgs" / org_id_norm
+    removed_files = 0
+    removed_dirs = 0
+
+    for rel in ["pages", "scrape", "pages_cleaned", "scrape_clean", "classify"]:
+        target = org_dir / rel
+        if not target.exists() or not target.is_dir():
+            continue
+        for entry in target.rglob("*"):
+            if entry.is_file():
+                removed_files += 1
+            elif entry.is_dir():
+                removed_dirs += 1
+        removed_dirs += 1
+        shutil.rmtree(target)
+
+    return removed_files, removed_dirs
+
+
+def _clear_classify_columns_for_org(websites_df: pd.DataFrame, org_id: str) -> pd.DataFrame:
+    mask = websites_df["_org_id"].astype(str).str.strip() == str(org_id or "").strip()
+    if not mask.any():
+        return websites_df
+
+    classify_cols = [col for col in websites_df.columns if col.startswith("_classify_")]
+    idx = websites_df[mask].index[-1]
+    for col in classify_cols:
+        websites_df.at[idx, col] = ""
+    return websites_df
 
 
 def _load_latest_prep_df(path: Path) -> pd.DataFrame:
@@ -1850,6 +1889,273 @@ def review_websites() -> None:
             ("File", str(input_path)),
         ],
     )
+
+
+def review_discover_mismatches() -> dict[str, int]:
+    """Review discover false-positive candidates and resolve URL decisions."""
+    input_path = DATA_DIR / "filtered" / "organizations_with_websites.csv"
+    settings = load_settings()
+    configured_search_engine = str(settings.search.review_search_engine or "")
+    review_search_engine = _normalize_review_search_engine(configured_search_engine)
+
+    if not input_path.exists():
+        console.print(f"[yellow]No file found at {input_path}[/yellow]")
+        console.print("Run [bold]benefind verify-discover[/bold] first.")
+        return {"accepted": 0, "url_changed": 0, "excluded": 0, "remaining": 0}
+
+    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    required_columns = [
+        "_website_url",
+        "_website_url_final",
+        "_website_origin",
+        "_website_source",
+        "_excluded_reason",
+        "_excluded_reason_note",
+        "_excluded_at",
+    ]
+    for col in required_columns:
+        if col not in df.columns:
+            df[col] = ""
+
+    for col in required_columns:
+        df[col] = df[col].astype(object).where(df[col].notna(), "")
+    df = ensure_discover_verify_columns(df)
+
+    # Manual URL entries/corrections are user-confirmed and should never
+    # remain in the discover mismatch review queue.
+    origin_series = df["_website_origin"].fillna("").astype(str).str.strip().str.lower()
+    final_url_series = df["_website_url_final"].fillna("").astype(str).str.strip()
+    website_url_series = df["_website_url"].fillna("").astype(str).str.strip()
+    has_manual_url = (final_url_series != "") | (website_url_series != "")
+    status_series = df["_discover_verify_status"].fillna("").astype(str).str.strip().str.lower()
+    manual_confirm_mask = (
+        origin_series.isin({"manual", "manual_llm"})
+        & has_manual_url
+        & status_series.isin({"", "review_required", "url_changed_needs_rescrape"})
+    )
+    if bool(manual_confirm_mask.any()):
+        now_iso = datetime.now(UTC).isoformat(timespec="seconds")
+        df.loc[manual_confirm_mask, "_discover_verify_status"] = "confirmed"
+        df.loc[manual_confirm_mask, "_discover_verify_needs_review"] = False
+        df.loc[manual_confirm_mask, "_discover_verify_reason"] = "manual_url_user_confirmed"
+        empty_verified_mask = (
+            df["_discover_verified_at"].fillna("").astype(str).str.strip() == ""
+        ) & manual_confirm_mask
+        df.loc[empty_verified_mask, "_discover_verified_at"] = now_iso
+        _save_csv_atomic(df, input_path)
+
+    excluded_mask = df["_excluded_reason"].apply(has_exclusion_reason)
+    review_mask = df["_discover_verify_needs_review"].fillna(False).astype(bool) & ~excluded_mask
+    queue_indices = list(df[review_mask].index)
+    if not queue_indices:
+        console.print("[green]No discover mismatches pending review.[/green]")
+        return {"accepted": 0, "url_changed": 0, "excluded": 0, "remaining": 0}
+
+    name_col = _detect_first_column(df, NAME_COLUMN_CANDIDATES)
+    location_col = _detect_first_column(df, ["Sitzort", "Sitz", "Ort", "Gemeinde"])
+
+    accepted = 0
+    url_changed = 0
+    excluded = 0
+    progress = ReviewProgress(total=len(queue_indices))
+    quit_requested = False
+
+    for position, idx in enumerate(queue_indices, start=1):
+        progress.current = position - 1
+        while True:
+            row = df.loc[idx]
+            org_id = str(row.get("_org_id", "") or "").strip()
+            org_name = str(row.get(name_col, "Unknown") or "Unknown") if name_col else "Unknown"
+            org_location = str(row.get(location_col, "") or "").strip() if location_col else ""
+            website_url = str(row.get("_website_url", "") or "").strip()
+            verify_reason = str(row.get("_discover_verify_reason", "") or "").strip()
+
+            clear()
+            console.print(progress.as_panel("Discover Mismatch Review"))
+            _website_org_panel(org_name, org_location, position, len(queue_indices))
+            _website_info_panel(
+                website_url,
+                str(row.get("_website_confidence", "") or ""),
+                str(row.get("_website_score", "") or ""),
+                str(row.get("_website_source", "") or ""),
+                str(row.get("_discover_verify_status", "") or ""),
+                "",
+                "",
+            )
+            if verify_reason:
+                reason_text = f"[{C_MUTED}]{verify_reason}[/{C_MUTED}]"
+                console.print(make_panel(reason_text, "Verify Reason"))
+
+            actions_panel = make_actions_table(
+                [
+                    ("a", "Accept discovered"),
+                    ("e", "Enter new URL"),
+                    ("x", "Exclude"),
+                    ("o", "Open website"),
+                    ("f", "Find on web"),
+                    ("s", "Skip"),
+                    ("q", "Quit"),
+                ]
+            )
+            console.print(make_panel(actions_panel, "Actions"))
+
+            try:
+                key = wait_for_key(["a", "e", "x", "o", "f", "s", "q", "esc"])
+            except KeyboardInterrupt:
+                quit_requested = True
+                break
+
+            action_map = {
+                "a": "accept",
+                "e": "change_url",
+                "x": "exclude",
+                "o": "open_site",
+                "f": "search",
+                "s": "skip",
+                "q": "quit",
+                "esc": "quit",
+            }
+            action = action_map.get(key, "skip")
+
+            if action == "open_site":
+                if not website_url:
+                    print_warning("No website URL available to open.")
+                else:
+                    try:
+                        opened = webbrowser.open_new_tab(website_url)
+                    except webbrowser.Error:
+                        opened = False
+                    if opened:
+                        print_success(f"Opened website: {website_url}")
+                    else:
+                        print_warning(f"Could not open browser automatically. URL: {website_url}")
+                continue
+
+            if action == "search":
+                opened, search_url = _open_review_search(
+                    org_name,
+                    org_location,
+                    review_search_engine,
+                )
+                if not search_url:
+                    print_warning("Cannot search: organization name and location are empty.")
+                elif opened:
+                    print_success(f"Opened search: {search_url}")
+                else:
+                    print_warning(f"Could not open browser automatically. URL: {search_url}")
+                continue
+
+            if action == "quit":
+                quit_requested = True
+                break
+
+            if action == "skip" or not action:
+                progress.mark_skipped()
+                break
+
+            if action == "accept":
+                if not confirm(f"Confirm discovered website for '{org_name}'?", default=True):
+                    continue
+                df.at[idx, "_discover_verify_status"] = "confirmed"
+                df.at[idx, "_discover_verify_needs_review"] = False
+                df.at[idx, "_discover_verify_reason"] = "manual_accept"
+                df.at[idx, "_discover_verified_at"] = datetime.now(UTC).isoformat(
+                    timespec="seconds"
+                )
+                _save_csv_atomic(df, input_path)
+                accepted += 1
+                progress.mark_accepted()
+                break
+
+            if action == "change_url":
+                new_url = ask_text("New website URL", default=website_url)
+                new_url = str(new_url or "").strip()
+                if not new_url:
+                    print_warning("URL is required.")
+                    continue
+                if not confirm(f"Set new website URL to {new_url}?", default=True):
+                    continue
+
+                timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+                df.at[idx, "_website_url"] = new_url
+                df.at[idx, "_website_url_final"] = new_url
+                df.at[idx, "_website_confidence"] = "manual"
+                df.at[idx, "_website_source"] = "manual: discover mismatch corrected"
+                df.at[idx, "_website_origin"] = "manual"
+                df.at[idx, "_website_needs_review"] = False
+                df.at[idx, "_excluded_reason"] = ""
+                df.at[idx, "_excluded_reason_note"] = ""
+                df.at[idx, "_excluded_at"] = ""
+
+                df.at[idx, "_discover_verify_status"] = "url_changed_needs_rescrape"
+                df.at[idx, "_discover_verify_needs_review"] = False
+                df.at[idx, "_discover_verify_reason"] = "manual_url_change_requires_rescrape"
+                df.at[idx, "_discover_verified_at"] = timestamp
+
+                df = _clear_classify_columns_for_org(df, org_id)
+                _save_csv_atomic(df, input_path)
+
+                _mark_prepare_stale_for_org_ids({org_id}, "discover_url_changed")
+                _reset_org_post_discover_state(org_id)
+                url_changed += 1
+                progress.mark_accepted()
+                break
+
+            if action == "exclude":
+                reason_note = _prompt_exclusion_reason()
+                if reason_note is None:
+                    continue
+                reason, note = reason_note
+                if not confirm(f"Exclude '{org_name}' with reason {reason.value}?", default=False):
+                    continue
+
+                timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+                df.at[idx, "_discover_verify_status"] = "excluded"
+                df.at[idx, "_discover_verify_needs_review"] = False
+                df.at[idx, "_discover_verify_reason"] = f"manual_excluded:{reason.value}"
+                df.at[idx, "_discover_verified_at"] = timestamp
+                df.at[idx, "_excluded_reason"] = reason.value
+                df.at[idx, "_excluded_reason_note"] = note
+                df.at[idx, "_excluded_at"] = timestamp
+                df.at[idx, "_website_origin"] = "manual_excluded"
+                _save_csv_atomic(df, input_path)
+                _mark_prepare_stale_for_org_ids({org_id}, "discover_verify_excluded")
+                excluded += 1
+                progress.mark_excluded()
+                break
+
+        if quit_requested:
+            break
+
+    remaining_mask = (
+        df["_discover_verify_needs_review"].fillna(False).astype(bool)
+        & ~df["_excluded_reason"].apply(has_exclusion_reason)
+    )
+    remaining = int(remaining_mask.sum())
+
+    clear()
+    summary_title = (
+        "Discover Mismatch Review Paused"
+        if quit_requested
+        else "Discover Mismatch Review Complete"
+    )
+    print_summary(
+        summary_title,
+        [
+            ("Accepted", accepted),
+            ("URL changed", url_changed),
+            ("Excluded", excluded),
+            ("Skipped", progress.skipped),
+            ("Remaining in queue", remaining),
+            ("File", str(input_path)),
+        ],
+    )
+    return {
+        "accepted": accepted,
+        "url_changed": url_changed,
+        "excluded": excluded,
+        "remaining": remaining,
+    }
 
 
 def review_url_normalization(

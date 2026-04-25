@@ -1652,11 +1652,21 @@ def prepare_scraping(
 
     summary_path = summary_output or (DATA_DIR / "filtered" / "organizations_scrape_prep.csv")
     existing_rows, existing_org_ids = load_prepare_summary(summary_path)
+    existing_summary_df = pd.DataFrame(existing_rows) if existing_rows else pd.DataFrame()
+    stale_org_ids: set[str] = set()
+    if not existing_summary_df.empty and "_org_id" in existing_summary_df.columns:
+        if "_scrape_requires_reprepare" in existing_summary_df.columns:
+            stale_mask = existing_summary_df["_scrape_requires_reprepare"].apply(_is_truthy_text)
+            stale_org_ids = {
+                str(value).strip()
+                for value in existing_summary_df.loc[stale_mask, "_org_id"].tolist()
+                if str(value).strip()
+            }
     effective_refresh = refresh or bool(org_id)
     if not effective_refresh and not debug_sample:
-        working_df = working_df[
-            ~working_df["_org_id"].astype(str).str.strip().isin(existing_org_ids)
-        ]
+        org_ids_series = working_df["_org_id"].astype(str).str.strip()
+        keep_mask = (~org_ids_series.isin(existing_org_ids)) | org_ids_series.isin(stale_org_ids)
+        working_df = working_df[keep_mask]
 
     skipped_existing = 0
     if not debug_sample:
@@ -1966,7 +1976,7 @@ def scrape(
     else:
         scrape_logger.setLevel(logging.WARNING)
 
-    from benefind.prepare_scraping import _now_iso, build_prepare_input_signature, load_org_targets
+    from benefind.prepare_scraping import build_prepare_input_signature, load_org_targets
 
     if reset:
         orgs_dir = DATA_DIR / "orgs"
@@ -2156,7 +2166,7 @@ def scrape(
 
     stale_org_ids: list[str] = []
     stale_reasons: dict[str, list[str]] = {}
-    checked_at = _now_iso()
+    checked_at = datetime.now(UTC).isoformat(timespec="seconds")
     signatures_backfilled = 0
     for prep_index, prep_row in selected_df.iterrows():
         org_id = str(prep_row.get("_org_id", "") or "").strip()
@@ -3179,6 +3189,376 @@ def scrape_clean(
     )
 
 
+@app.command(name="verify-discover")
+def verify_discover(
+    input_file: Path | None = typer.Option(
+        None,
+        "--input",
+        "-i",
+        help="Path to discovered websites CSV (default: filtered/organizations_with_websites.csv)",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Path to output CSV (default: in-place)",
+    ),
+    refresh: bool = typer.Option(
+        False,
+        "--refresh",
+        help="Re-run discover verification for all eligible non-excluded organizations.",
+    ),
+    wizard: bool = typer.Option(
+        True,
+        "--wizard/--no-wizard",
+        help="Enable interactive prompts.",
+    ),
+    llm_verify: bool | None = typer.Option(
+        None,
+        "--llm-verify/--no-llm-verify",
+        help="Enable LLM verification for borderline rule scores.",
+    ),
+    stop_after: int | None = typer.Option(
+        None,
+        "--stop-after",
+        help="Process at most N pending rows, then exit cleanly.",
+    ),
+    workers: int = typer.Option(
+        8,
+        "--workers",
+        help="Concurrent workers for discover verification.",
+    ),
+) -> None:
+    """Verify discover results against scraped cleaned content (false-positive gate)."""
+    import pandas as pd
+
+    from benefind.config import DATA_DIR
+    from benefind.external_api import ExternalApiAccessError
+    from benefind.verify_discover import (
+        collect_clean_content,
+        ensure_discover_verify_columns,
+        load_clean_eligible_org_ids,
+        verify_discover_match,
+    )
+
+    settings = load_settings()
+    _setup_logging(settings.log_level)
+    interactive = wizard and sys.stdin.isatty() and sys.stdout.isatty()
+    llm_verify_enabled = (
+        settings.search.discover_verify_llm_enabled if llm_verify is None else llm_verify
+    )
+
+    if stop_after is not None and stop_after <= 0:
+        raise typer.BadParameter("--stop-after must be greater than 0.")
+    if workers <= 0:
+        raise typer.BadParameter("--workers must be greater than 0.")
+
+    input_path = input_file or (DATA_DIR / "filtered" / "organizations_with_websites.csv")
+    output_path = output_file or input_path
+    if not input_path.exists():
+        print_error(f"Input file not found: {input_path}")
+        raise typer.Exit(code=1)
+
+    df = pd.read_csv(input_path, encoding="utf-8-sig")
+    if df.empty:
+        console.print("[yellow]Input CSV is empty. Nothing to verify.[/yellow]")
+        return
+    if "_org_id" not in df.columns:
+        raise typer.BadParameter("Input CSV has no _org_id column.")
+
+    name_column = _detect_first_column(list(df.columns), NAME_COLUMN_CANDIDATES, default="")
+    if not name_column:
+        raise typer.BadParameter("Could not detect organization name column in input CSV.")
+    location_column = _detect_first_column(
+        list(df.columns),
+        ["Sitzort", "Sitz", "Ort", "Gemeinde"],
+        default="",
+    )
+
+    for col in ["_website_url", "_website_url_final", "_excluded_reason", "_website_origin"]:
+        if col not in df.columns:
+            df[col] = ""
+
+    for col in ["_website_url", "_website_url_final", "_excluded_reason", "_website_origin"]:
+        df[col] = df[col].astype(object).where(df[col].notna(), "")
+
+    df = ensure_discover_verify_columns(df)
+
+    # Manual URL entries/corrections are considered user-confirmed and should
+    # not be re-queued for discover verification on subsequent runs.
+    status_series = df["_discover_verify_status"].fillna("").astype(str).str.strip().str.lower()
+    manual_origin_series = df["_website_origin"].fillna("").astype(str).str.strip().str.lower()
+    final_url_series = df["_website_url_final"].fillna("").astype(str).str.strip()
+    website_url_series = df["_website_url"].fillna("").astype(str).str.strip()
+    has_manual_url = (final_url_series != "") | (website_url_series != "")
+    manual_confirm_mask = (
+        manual_origin_series.isin({"manual", "manual_llm"})
+        & has_manual_url
+        & status_series.isin({"", "review_required", "url_changed_needs_rescrape"})
+    )
+    if bool(manual_confirm_mask.any()):
+        now_iso = datetime.now(UTC).isoformat(timespec="seconds")
+        df.loc[manual_confirm_mask, "_discover_verify_status"] = "confirmed"
+        df.loc[manual_confirm_mask, "_discover_verify_needs_review"] = False
+        df.loc[manual_confirm_mask, "_discover_verify_reason"] = "manual_url_user_confirmed"
+        empty_verified = (
+            df["_discover_verified_at"].fillna("").astype(str).str.strip() == ""
+        ) & manual_confirm_mask
+        df.loc[empty_verified, "_discover_verified_at"] = now_iso
+
+    excluded_mask = has_exclusion_reason_series(df["_excluded_reason"])
+    eligible_org_ids = load_clean_eligible_org_ids()
+    if not eligible_org_ids:
+        raise typer.BadParameter(
+            "No eligible organizations with usable cleaned text found. "
+            "Run benefind scrape-clean first."
+        )
+
+    org_ids = df["_org_id"].astype(str).str.strip()
+    status = df["_discover_verify_status"].fillna("").astype(str).str.strip().str.lower()
+    pending_mask = org_ids.isin(eligible_org_ids) & ~excluded_mask
+    if not refresh:
+        pending_mask = pending_mask & (
+            (status == "") | status.isin({"url_changed_needs_rescrape"})
+        )
+
+    pending_df = df[pending_mask]
+    if stop_after is not None:
+        pending_df = pending_df.head(stop_after)
+
+    if pending_df.empty:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+        df.to_csv(temp_path, index=False, encoding="utf-8-sig")
+        temp_path.replace(output_path)
+        console.print("[green]No pending discover verification rows.[/green]")
+        return
+
+    if interactive and llm_verify_enabled:
+        console.print(
+            make_panel(
+                "[bold yellow]This operation may call OpenAI for borderline rows.[/bold yellow]",
+                "Cost Warning",
+                border_style="yellow",
+            )
+        )
+        if not confirm("Proceed with discover verification?", default=True):
+            console.print("[yellow]Verify-discover cancelled.[/yellow]")
+            return
+
+    queue_indices = list(pending_df.index)
+    total = len(queue_indices)
+    progress = {"completed": 0, "confirmed": 0, "review": 0}
+
+    def save_checkpoint() -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+        df.to_csv(temp_path, index=False, encoding="utf-8-sig")
+        temp_path.replace(output_path)
+
+    save_checkpoint()
+
+    def apply_result(
+        idx: int,
+        *,
+        status: str,
+        needs_review: bool,
+        confidence: str,
+        score: int,
+        reason: str,
+        stage: str,
+        rule_name_match: bool | None,
+        rule_location_match: bool | None,
+        llm_belongs: bool | None,
+        llm_score: int | None,
+        llm_reason: str,
+    ) -> None:
+        df.at[idx, "_discover_verify_status"] = status
+        df.at[idx, "_discover_verify_needs_review"] = needs_review
+        df.at[idx, "_discover_verify_confidence"] = confidence
+        df.at[idx, "_discover_verify_score"] = score
+        df.at[idx, "_discover_verify_reason"] = reason
+        df.at[idx, "_discover_verify_stage"] = stage
+        if rule_name_match is not None:
+            df.at[idx, "_discover_verify_rule_name_match"] = rule_name_match
+        if rule_location_match is not None:
+            df.at[idx, "_discover_verify_rule_location_match"] = rule_location_match
+        df.at[idx, "_discover_verify_llm_belongs"] = llm_belongs
+        df.at[idx, "_discover_verify_llm_score"] = llm_score
+        df.at[idx, "_discover_verify_llm_reason"] = llm_reason
+        df.at[idx, "_discover_verified_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+
+        if needs_review:
+            progress["review"] += 1
+        else:
+            progress["confirmed"] += 1
+        progress["completed"] += 1
+
+    def process_one(idx: int) -> dict[str, object]:
+        row = df.loc[idx]
+        org_id = str(row.get("_org_id", "") or "").strip()
+        org_name = str(row.get(name_column, "") or "").strip()
+        org_location = str(row.get(location_column, "") or "").strip() if location_column else ""
+        website_url = str(row.get("_website_url_final", "") or "").strip() or str(
+            row.get("_website_url", "") or ""
+        ).strip()
+
+        if not website_url:
+            return {
+                "idx": idx,
+                "status": "review_required",
+                "needs_review": True,
+                "confidence": "low",
+                "score": 0,
+                "reason": "missing_website_url",
+                "stage": "rules_review",
+                "rule_name_match": None,
+                "rule_location_match": None,
+                "llm_belongs": None,
+                "llm_score": None,
+                "llm_reason": "",
+            }
+
+        content = collect_clean_content(org_id)
+        if not content.strip():
+            return {
+                "idx": idx,
+                "status": "review_required",
+                "needs_review": True,
+                "confidence": "low",
+                "score": 0,
+                "reason": "missing_clean_content",
+                "stage": "rules_review",
+                "rule_name_match": None,
+                "rule_location_match": None,
+                "llm_belongs": None,
+                "llm_score": None,
+                "llm_reason": "",
+            }
+
+        result = verify_discover_match(
+            org_name=org_name,
+            org_location=org_location,
+            website_url=website_url,
+            content=content,
+            settings=settings,
+            llm_verify_enabled=llm_verify_enabled,
+        )
+        return {
+            "idx": idx,
+            "status": result.status,
+            "needs_review": result.needs_review,
+            "confidence": result.confidence,
+            "score": result.score,
+            "reason": result.reason,
+            "stage": result.decision_stage,
+            "rule_name_match": result.rule_name_match,
+            "rule_location_match": result.rule_location_match,
+            "llm_belongs": result.llm_belongs,
+            "llm_score": result.llm_score,
+            "llm_reason": result.llm_reason,
+        }
+
+    if workers == 1:
+        for idx in queue_indices:
+            try:
+                payload = process_one(idx)
+            except ExternalApiAccessError as e:
+                save_checkpoint()
+                print_warning("Verify-discover stopped early due to external API access issue.")
+                print_error(f"{e.provider}: {e.reason}")
+                raise typer.Exit(code=1)
+
+            apply_result(
+                int(payload["idx"]),
+                status=str(payload["status"]),
+                needs_review=bool(payload["needs_review"]),
+                confidence=str(payload["confidence"]),
+                score=int(payload["score"]),
+                reason=str(payload["reason"]),
+                stage=str(payload["stage"]),
+                rule_name_match=payload["rule_name_match"],
+                rule_location_match=payload["rule_location_match"],
+                llm_belongs=payload["llm_belongs"],
+                llm_score=payload["llm_score"],
+                llm_reason=str(payload["llm_reason"]),
+            )
+            save_checkpoint()
+
+            if interactive:
+                progress_line = (
+                    f"\r[{progress['completed']}/{total}] "
+                    f"confirmed={progress['confirmed']} review={progress['review']}"
+                )
+                typer.echo(progress_line, nl=False)
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        access_error: ExternalApiAccessError | None = None
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {executor.submit(process_one, idx): idx for idx in queue_indices}
+            for future in as_completed(future_map):
+                try:
+                    payload = future.result()
+                except ExternalApiAccessError as e:
+                    access_error = e
+                    for pending_future in future_map:
+                        if not pending_future.done():
+                            pending_future.cancel()
+                    break
+
+                apply_result(
+                    int(payload["idx"]),
+                    status=str(payload["status"]),
+                    needs_review=bool(payload["needs_review"]),
+                    confidence=str(payload["confidence"]),
+                    score=int(payload["score"]),
+                    reason=str(payload["reason"]),
+                    stage=str(payload["stage"]),
+                    rule_name_match=payload["rule_name_match"],
+                    rule_location_match=payload["rule_location_match"],
+                    llm_belongs=payload["llm_belongs"],
+                    llm_score=payload["llm_score"],
+                    llm_reason=str(payload["llm_reason"]),
+                )
+                save_checkpoint()
+
+                if interactive:
+                    progress_line = (
+                        f"\r[{progress['completed']}/{total}] "
+                        f"confirmed={progress['confirmed']} review={progress['review']}"
+                    )
+                    typer.echo(progress_line, nl=False)
+
+        if access_error is not None:
+            save_checkpoint()
+            print_warning("Verify-discover stopped early due to external API access issue.")
+            print_error(f"{access_error.provider}: {access_error.reason}")
+            raise typer.Exit(code=1)
+
+    if interactive:
+        typer.echo("")
+
+    print_summary(
+        "Verify Discover Results",
+        [
+            ("Processed", progress["completed"]),
+            ("Confirmed", progress["confirmed"]),
+            ("Needs review", progress["review"]),
+            ("Saved", str(output_path)),
+        ],
+    )
+
+    if interactive and progress["review"] > 0:
+        if confirm(
+            f"{progress['review']} discover mismatches need review. Start review now?",
+            default=True,
+        ):
+            from benefind.review import review_discover_mismatches
+
+            review_discover_mismatches()
+
+
 @app.command()
 def subset(
     input_file: Path | None = typer.Option(
@@ -4006,6 +4386,27 @@ def classify(
         )
         return
 
+    if "_discover_verify_status" not in base_df.columns:
+        raise typer.BadParameter(
+            "Missing discover verification columns. Run benefind verify-discover first."
+        )
+
+    verify_status = base_df["_discover_verify_status"].astype(str).str.strip().str.lower()
+    active_mask_for_verify = base_df["_excluded_reason"].astype(str).str.strip() == ""
+    eligible_for_classify_verify = base_df["_org_id"].astype(str).str.strip().isin(eligible_org_ids)
+    unverified_mask = (
+        active_mask_for_verify
+        & eligible_for_classify_verify
+        & ~verify_status.isin({"confirmed"})
+    )
+    unverified_count = int(unverified_mask.sum())
+    if unverified_count > 0:
+        raise typer.BadParameter(
+            "Discover verification incomplete: "
+            f"{unverified_count} active rows are not confirmed. "
+            "Run benefind verify-discover and benefind review discover-mismatches first."
+        )
+
     cols = question_columns(selected_question.id)
     org_ids_series = base_df["_org_id"].astype(str).str.strip()
     active_mask = base_df["_excluded_reason"].astype(str).str.strip() == ""
@@ -4324,12 +4725,13 @@ def review(
         ...,
         help=(
             "What to review: locations, websites, url-normalization, "
-            "scrape-readiness, scrape-quality, zefix-information"
+            "scrape-readiness, scrape-quality, zefix-information, discover-mismatches"
         ),
     ),
 ) -> None:
     """Review flagged items interactively and decide include/exclude."""
     from benefind.review import (
+        review_discover_mismatches,
         review_locations,
         review_scrape_quality,
         review_scrape_readiness,
@@ -4354,10 +4756,12 @@ def review(
         review_scrape_quality()
     elif target in {"zefix-information", "zefix_information", "zefix"}:
         review_zefix_information()
+    elif target in {"discover-mismatches", "discover_mismatches", "discover-mismatch"}:
+        review_discover_mismatches()
     else:
         raise typer.BadParameter(
             "Expected one of: locations, websites, url-normalization, "
-            "scrape-readiness, scrape-quality, zefix-information"
+            "scrape-readiness, scrape-quality, zefix-information, discover-mismatches"
         )
 
 
@@ -4415,13 +4819,19 @@ def run() -> None:
             "  [cyan]benefind parse[/cyan]\n"
             "  [cyan]benefind filter[/cyan]\n"
             "  [cyan]benefind discover[/cyan]\n"
+            "  [cyan]benefind add-zefix-information[/cyan]\n"
+            "  [cyan]benefind review zefix-information[/cyan]\n"
+            "  [cyan]benefind guess-legal-form[/cyan]\n"
             "  [cyan]benefind normalize-urls[/cyan]\n"
             "  [cyan]benefind review-url-normalization[/cyan]\n"
             "  [cyan]benefind prepare-scraping[/cyan]\n"
             "  [cyan]benefind review scrape-readiness[/cyan]\n"
             "  [cyan]benefind scrape[/cyan]\n"
             "  [cyan]benefind review scrape-quality[/cyan]\n"
-            "  [cyan]benefind scrape-clean[/cyan]",
+            "  [cyan]benefind scrape-clean[/cyan]\n"
+            "  [cyan]benefind verify-discover[/cyan]\n"
+            "  [cyan]benefind review discover-mismatches[/cyan]\n"
+            "  [cyan]benefind classify[/cyan]",
             "benefind pipeline",
         )
     )

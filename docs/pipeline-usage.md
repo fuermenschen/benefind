@@ -16,6 +16,9 @@ uv run benefind review scrape-readiness
 uv run benefind scrape
 uv run benefind review scrape-quality
 uv run benefind scrape-clean
+uv run benefind verify-discover
+uv run benefind review discover-mismatches
+uv run benefind classify
 ```
 
 ## Individual steps
@@ -34,6 +37,9 @@ uv run benefind review scrape-readiness # Step 3e-review: resolve blocked/seed-u
 uv run benefind scrape      # Step 3f: Scrape websites
 uv run benefind review scrape-quality   # Step 3f-review: review no/poor scrape outcomes
 uv run benefind scrape-clean # Step 3g: remove duplicate intra-org content segments
+uv run benefind verify-discover # Step 3h: verify discover match against cleaned content
+uv run benefind review discover-mismatches # Step 3h-review: resolve discover false positives
+uv run benefind classify      # Step 4: LLM-backed classification
 ```
 
 ## Cost-safe testing on a subset
@@ -53,6 +59,9 @@ uv run benefind review scrape-readiness
 uv run benefind scrape
 uv run benefind review scrape-quality
 uv run benefind scrape-clean
+uv run benefind verify-discover
+uv run benefind review discover-mismatches
+uv run benefind classify
 ```
 
 After each quality/cost tuning pass, extend the same subset and re-run downstream
@@ -72,6 +81,9 @@ uv run benefind review scrape-readiness
 uv run benefind scrape
 uv run benefind review scrape-quality
 uv run benefind scrape-clean
+uv run benefind verify-discover
+uv run benefind review discover-mismatches
+uv run benefind classify
 ```
 
 `benefind extend` is incremental:
@@ -178,6 +190,7 @@ uv run benefind review locations                    # include/exclude uncertain 
 uv run benefind review websites                     # review uncertain websites via wizard
 uv run benefind review zefix-information            # review unresolved ZEFIX outcomes
 uv run benefind review scrape-quality               # review no/poor scrape outcomes
+uv run benefind review discover-mismatches         # review discover false positives
 ```
 
 ZEFIX review (`benefind review zefix-information`) actions:
@@ -256,6 +269,39 @@ with no successful scrape pages or only low-quality pages. Actions mirror scrape
 review: retry scrape, set final URL and re-prepare, exclude with predefined reason,
 accept as-is, skip, or quit. Then run `uv run benefind scrape-clean` to build cleaned
 artifacts for downstream manual analysis.
+
+`benefind verify-discover` behavior highlights:
+
+- runs after `scrape-clean` and uses cleaned content as evidence
+- goal is to catch discover false positives before `classify`
+- stage 1 applies deterministic checks (org name variants + location matching, domain hints)
+- stage 2 optionally calls LLM for borderline rows (`search.discover_verify_*` settings)
+- runs concurrently (default `--workers 8`)
+- writes verification fields in `data/filtered/organizations_with_websites.csv`:
+  `_discover_verify_status`, `_discover_verify_needs_review`, `_discover_verify_score`,
+  `_discover_verify_reason`, `_discover_verify_stage`, `_discover_verify_*_match`,
+  `_discover_verify_llm_*`, `_discover_verified_at`
+
+`benefind review discover-mismatches` behavior highlights:
+
+- queues rows where `_discover_verify_needs_review=true`
+- supports actions: accept discovered URL, set a new URL, exclude,
+  open current website (`o`), and web search by org + location (`f`)
+- when setting a new URL, the command:
+  - sets `_website_url` and `_website_url_final` immediately
+  - marks prep as stale (`_scrape_requires_reprepare=true`)
+  - removes old org scrape/scrape-clean/classify artifacts so downstream steps re-run from post-discover state
+
+`verify-discover` rerun behavior:
+
+- default reruns only rows with empty verify status or `url_changed_needs_rescrape`
+- rows already marked `review_required` are kept as-is and not re-verified unless `--refresh` is used
+
+`benefind classify` now requires discover verification confirmation:
+
+- active rows must have `_discover_verify_status=confirmed`
+- this gate is enforced for classify-eligible rows (organizations with usable cleaned text)
+- otherwise classify stops with guidance to run verify/review first
 
 `benefind scrape-clean` behavior highlights:
 
