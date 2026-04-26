@@ -14,8 +14,15 @@
       "prompt_id": "classify.q02_regional_focus",
       "source_path": "/Users/simonmoser/Code/benefind/config/prompts/classify.q02_regional_focus.toml",
       "fingerprint": "edc3711342a539e2f4f486ff6643f7e081ba089fc25fe348368e9d493975be1b"
+    },
+    {
+      "id": "q03_donation_ask",
+      "order": 30,
+      "prompt_id": "classify.q03_donation_ask",
+      "source_path": "/Users/simonmoser/Code/benefind/config/prompts/classify.q03_donation_ask.toml",
+      "fingerprint": "8406270a20dc875ea630b883330dec2bf95157f34a06bc5b68b134170db579e2"
     }
   ],
   "created_at": "2026-04-24T20:10:55+00:00",
-  "updated_at": "2026-04-25T17:35:24+00:00"
+  "updated_at": "2026-04-26T17:24:31+00:00"
 }

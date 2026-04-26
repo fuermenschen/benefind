@@ -146,8 +146,21 @@ mode = "all"
 review_reason = "Confident explicit donation ask with supporting evidence."
 conditions = [
   { field = "asks_for_donations", op = "eq", value = "yes" },
-  { field = "confidence", op = "gte", value = 0.75 },
+  { field = "confidence", op = "gte", value = 0.7 },
   { field = "evidence", op = "len_gte", value = 1 },
+  { field = "explicit_ask_terms", op = "len_gte", value = 1 },
+]
+
+[[classify.policy.rules]]
+id = "q03_auto_accept_donation_ask_multi_evidence"
+action = "auto_accept"
+priority = 11
+mode = "all"
+review_reason = "Donation ask supported by multiple evidence quotes."
+conditions = [
+  { field = "asks_for_donations", op = "eq", value = "yes" },
+  { field = "confidence", op = "gte", value = 0.65 },
+  { field = "evidence", op = "len_gte", value = 2 },
   { field = "explicit_ask_terms", op = "len_gte", value = 1 },
 ]
 
@@ -159,7 +172,7 @@ mode = "all"
 review_reason = "Confident explicit no-donations statement."
 conditions = [
   { field = "asks_for_donations", op = "eq", value = "no" },
-  { field = "confidence", op = "gte", value = 0.75 },
+  { field = "confidence", op = "gte", value = 0.7 },
   { field = "evidence", op = "len_gte", value = 1 },
 ]
 
@@ -171,7 +184,7 @@ mode = "any"
 review_reason = "Unknown or low-confidence donation classification requires manual review."
 conditions = [
   { field = "asks_for_donations", op = "eq", value = "unknown" },
-  { field = "confidence", op = "lte", value = 0.7 },
+  { field = "confidence", op = "lte", value = 0.6 },
 ]
 
 [[classify.policy.rules]]
