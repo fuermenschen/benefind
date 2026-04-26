@@ -1169,11 +1169,11 @@ def _effective_normalized_payload(ask_payload: dict[str, object]) -> tuple[dict[
     manual_override = ask_payload.get("manual_override", {})
     if isinstance(manual_override, dict):
         manual_normalized = manual_override.get("normalized", {})
-        if isinstance(manual_normalized, dict):
+        if isinstance(manual_normalized, dict) and manual_normalized:
             return manual_normalized, "manual_override"
 
     normalized = ask_payload.get("normalized", {})
-    if isinstance(normalized, dict):
+    if isinstance(normalized, dict) and normalized:
         return normalized, "llm"
     return {}, "none"
 
@@ -1234,6 +1234,28 @@ def _parse_edit_value(raw_value: str, field_cfg: OutputFieldConfig) -> object:
             raise ValueError("Object-list fields require a JSON array.")
         return parsed
     raise ValueError(f"Unsupported editable field kind: {field_cfg.kind!r}")
+
+
+def _default_payload_for_question(question: ClassifyQuestion) -> dict[str, object]:
+    defaults: dict[str, object] = {}
+    for field_cfg in question.output_fields:
+        if field_cfg.kind == "string":
+            if field_cfg.allowed:
+                preferred = "unknown" if "unknown" in field_cfg.allowed else field_cfg.allowed[0]
+                defaults[field_cfg.key] = preferred
+            else:
+                defaults[field_cfg.key] = ""
+            continue
+        if field_cfg.kind == "number":
+            defaults[field_cfg.key] = (
+                float(field_cfg.min_value) if field_cfg.min_value is not None else 0.0
+            )
+            continue
+        if field_cfg.kind in {"string_list", "object_list"}:
+            defaults[field_cfg.key] = []
+            continue
+        defaults[field_cfg.key] = ""
+    return defaults
 
 
 def _prompt_review_payload_edit(
@@ -1476,6 +1498,7 @@ def review_classifications(
 
         while True:
             clear()
+            console.print()
             header = (
                 f"[bold]Classify Review[/bold]  [dim]{pos}/{len(queue_indices)}[/dim]\n"
                 f"Question: [bold]{question.id}[/bold]\n"
@@ -1634,8 +1657,11 @@ def review_classifications(
                 continue
             if key == "u":
                 if not normalized_payload:
-                    print_warning("No proposal payload available to edit.")
-                    continue
+                    normalized_payload = _default_payload_for_question(question)
+                    print_warning(
+                        "No proposal payload available; started from schema defaults. "
+                        "Adjust fields as needed."
+                    )
                 updated_payload = _prompt_review_payload_edit(
                     question=question,
                     current_payload=normalized_payload,

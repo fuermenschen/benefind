@@ -12,6 +12,7 @@ Design principles:
 
 from __future__ import annotations
 
+import os
 import select
 import sys
 import termios
@@ -148,7 +149,12 @@ def make_actions_table(actions: list[tuple[str, str]]) -> Table:
 
 def clear() -> None:
     """Clear the terminal screen."""
-    console.clear()
+    disable_clear = str(os.environ.get("BENEFIND_NO_CLEAR", "") or "").strip().lower()
+    if disable_clear in {"1", "true", "yes", "on"}:
+        return
+    if not sys.stdout.isatty():
+        return
+    console.clear(home=True)
 
 
 def print_panel(content: Any, title: str, *, border_style: str = C_BORDER) -> None:

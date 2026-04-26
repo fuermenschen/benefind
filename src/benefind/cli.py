@@ -4492,9 +4492,6 @@ def classify(
 
     selected_question = None
     selected_phase = phase_norm
-    selected_counts = (0, 0)
-    selected_conclude_count = 0
-
     if phase_norm == "auto":
         for item in active_questions:
             ask_pending, review_pending = count_phase(base_df, item, eligible_org_ids)
@@ -4503,20 +4500,14 @@ def classify(
             if ask_pending > 0:
                 selected_question = item
                 selected_phase = "ask"
-                selected_counts = (ask_pending, review_pending)
-                selected_conclude_count = conclude_pending
                 break
             if review_pending > 0:
                 selected_question = item
                 selected_phase = "review"
-                selected_counts = (ask_pending, review_pending)
-                selected_conclude_count = conclude_pending
                 break
             if conclude_pending > 0 and interactive:
                 selected_question = item
                 selected_phase = "conclude"
-                selected_counts = (ask_pending, review_pending)
-                selected_conclude_count = conclude_pending
                 break
     else:
         for item in active_questions:
@@ -4528,20 +4519,14 @@ def classify(
             ) or (phase_norm == "conclude" and conclude_pending > 0):
                 selected_question = item
                 selected_phase = phase_norm
-                selected_counts = (ask_pending, review_pending)
-                selected_conclude_count = conclude_pending
                 break
             if phase_norm == "conclude" and review_pending > 0:
                 selected_question = item
                 selected_phase = phase_norm
-                selected_counts = (ask_pending, review_pending)
-                selected_conclude_count = conclude_pending
                 break
             if phase_norm == "conclude" and ask_pending > 0:
                 selected_question = item
                 selected_phase = phase_norm
-                selected_counts = (ask_pending, review_pending)
-                selected_conclude_count = conclude_pending
                 break
 
     if selected_question is None:
@@ -4690,21 +4675,6 @@ def classify(
             console.print(f"Seed: {used_seed}")
         format_debug_result(org_id, org_name, org_location, snippets, result, error_message)
         return
-
-    print_summary(
-        "Classify Plan",
-        [
-            ("Question", selected_question.id),
-            ("Phase", selected_phase),
-            ("Workers", workers if selected_phase == "ask" else "-"),
-            ("Ask pending", selected_counts[0]),
-            ("Review pending", selected_counts[1]),
-            ("Conclude pending", selected_conclude_count),
-            ("Selected rows", len(queue_indices) if selected_phase in {"ask", "review"} else "-"),
-            ("Input", str(input_path)),
-            ("Output", str(output_path)),
-        ],
-    )
 
     if selected_phase == "conclude":
         conclude_stats = summarize_question_for_conclude(

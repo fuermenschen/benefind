@@ -310,6 +310,7 @@ artifacts for downstream manual analysis.
 - step order is `ask -> review -> conclude`
 - review actions now include proposal updates (`u`) to correct question outputs before accept/exclude
 - review exclude (`x`) prompts for global exclusion reason (`NO_INFORMATION`, `IN_LIQUIDATION`, `NOT_EXIST`, `IRRELEVANT_PURPOSE`, `OTHER` with required note)
+- if your terminal clips top lines during interactive loops, disable screen clears temporarily with `BENEFIND_NO_CLEAR=1`
 - `conclude` shows per-question totals (auto accepted/excluded, review accepted/excluded, pending)
 - `conclude` supports hotkeys to inspect random examples from automatic/manual outcome buckets
 - `conclude` is blocked until both ask and review are complete for the selected question
