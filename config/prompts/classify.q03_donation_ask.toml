@@ -1,0 +1,254 @@
+[prompt]
+id = "classify.q03_donation_ask"
+description = "Conservative evidence-only classification of explicit donation solicitation"
+template = """
+Classify whether one organization explicitly asks for monetary donations using ONLY the provided evidence snippets.
+This question is only about explicit donation solicitation, NOT about how the organization is funded.
+Do not infer facts that are not stated in the snippets.
+If the evidence is weak, vague, or conflicting, be conservative.
+Prefer unknown or lower confidence over guessing.
+
+Return exactly one valid JSON object.
+Return no markdown, no prose, and no extra keys.
+
+Required keys:
+- evidence
+- explicit_ask_terms
+- asks_for_donations
+- reason
+- confidence
+
+Output shape:
+{{
+  "evidence": [],
+  "explicit_ask_terms": [],
+  "asks_for_donations": "...",
+  "reason": "...",
+  "confidence": 0.0
+}}
+
+Organization:
+- name: {org_name}
+- location: {org_location}
+
+Allowed asks_for_donations values (choose exactly one string):
+- yes
+- no
+- unknown
+
+asks_for_donations definitions:
+- yes: the snippets explicitly ask supporters for monetary donations, or clearly present a donation button, donation page, donation account, QR donation, or similar donation mechanism for this organization.
+- no: the snippets explicitly state that donations are not requested, not accepted, or not needed.
+- unknown: the snippets do not contain a clear donation ask, or the evidence is ambiguous or conflicting.
+
+evidence:
+- Array with 1 to 4 items when confidence is 0.6 or higher.
+- Empty array is allowed only when confidence is below 0.6.
+- Each item must be an object with exactly these keys: snippet_id, quote.
+- quote must be a short exact quote copied from a provided snippet.
+- Button labels, menu items, link text, form headings, and payment labels are acceptable quotes if they clearly indicate a donation ask.
+- Every snippet_id must match a provided snippet_id.
+
+explicit_ask_terms:
+- Array of 0 to 6 unique short exact words or phrases copied from the snippets that explicitly signal a donation ask.
+- Use only exact text that appears in the snippets.
+- Examples only: "Spenden", "Jetzt spenden", "Ihre Spende", "Donate", "Faire un don", "TWINT Spende"
+- Use an empty array unless asks_for_donations is yes.
+
+reason:
+- One short sentence that states the decisive signal for the classification.
+
+confidence:
+- Number from 0.0 to 1.0.
+- Use lower confidence for vague, generic, promotional, conflicting, or insufficient evidence.
+- Confidence calibration anchors:
+  - 0.8 to 1.0: explicit donation ask (including a clearly labeled donation button/form/page/payment flow) or explicit no-donations statement, supported by at least 1 very clear quote, usually 2.
+  - 0.6 to 0.79: one clear but limited donation signal, or a strong ask with only brief surrounding context.
+  - below 0.6: generic support language, funding statements without an ask, unlabeled payment details, or conflicting evidence.
+
+Decision rules:
+1. Use yes only for explicit donation solicitation aimed at obtaining monetary contributions.
+2. Do not infer yes from nonprofit status, tax deductibility, charitable mission, financial need, impact claims, or statements that the organization is funded by donations.
+3. Generic phrases like "support us", "help us", "contribute", or "back our work" count as yes only when the same snippet context clearly indicates a monetary donation action (for example: donation button/form/page, donation-labeled payment method, or donation-specific CTA).
+4. Do not infer yes from volunteering, in-kind goods, sponsorships, ticket sales, shop sales, memberships, subscriptions, or course fees.
+5. Bank details, IBANs, QR codes, TWINT, payment forms, or account numbers count as yes when they are clearly donation-labeled OR embedded in a donation-specific flow (for example, a dedicated donate page/form/button context).
+6. A clearly donation-oriented button, page, or form counts as yes even if the surrounding text is brief.
+7. Use no only for explicit negative statements. If the snippets are silent, use unknown, not no.
+8. If the evidence conflicts and no clear explicit statement resolves it, lower confidence and choose unknown.
+9. If quotes are not clearly supported, leave them out and lower confidence.
+10. Every quote must be verbatim from the snippets.
+11. Return only valid JSON.
+
+Evidence snippets:
+{evidence_snippets}
+"""
+
+[prompt.placeholders]
+org_name = "Organization name"
+org_location = "Organization location (or '-')"
+evidence_snippets = "Prepared snippet list with snippet_id and text"
+
+[prompt.response]
+format = "json_object"
+required_keys = ["evidence", "explicit_ask_terms", "asks_for_donations", "reason", "confidence"]
+
+[classify]
+id = "q03_donation_ask"
+enabled = true
+description = "Explicit donation ask classification"
+order = 30
+ask_max_attempts = 2
+
+[classify.source]
+kind = "pages_cleaned"
+max_snippets = 18
+max_snippet_chars = 1000
+max_total_snippet_chars = 10000
+min_snippet_chars = 0
+selection_mode = "keyword_priority"
+
+[classify.source.keyword_priority]
+terms = [
+  "donation",
+  "donations",
+  "donate",
+  "don",
+  "faire un don",
+  "dona",
+  "donazione",
+  "spende",
+  "spenden",
+  "spendenkonto",
+  "unterstuetzen",
+  "unterstützen",
+  "jetzt spenden",
+  "soutenir",
+  "sostieni",
+  "sostienici",
+  "twint",
+  "iban",
+  "qr-spende",
+  "qr spende",
+  "qr-rechnung",
+  "qr rechnung",
+]
+case_sensitive = false
+match_mode = "word_boundary"
+fill_mode = "fallback_file_order"
+
+[classify.policy]
+
+[[classify.policy.rules]]
+id = "q03_auto_accept_donation_ask"
+action = "auto_accept"
+priority = 10
+mode = "all"
+review_reason = "Confident explicit donation ask with supporting evidence."
+conditions = [
+  { field = "asks_for_donations", op = "eq", value = "yes" },
+  { field = "confidence", op = "gte", value = 0.75 },
+  { field = "evidence", op = "len_gte", value = 1 },
+  { field = "explicit_ask_terms", op = "len_gte", value = 1 },
+]
+
+[[classify.policy.rules]]
+id = "q03_auto_exclude_no_donation_ask"
+action = "auto_exclude"
+priority = 20
+mode = "all"
+review_reason = "Confident explicit no-donations statement."
+conditions = [
+  { field = "asks_for_donations", op = "eq", value = "no" },
+  { field = "confidence", op = "gte", value = 0.75 },
+  { field = "evidence", op = "len_gte", value = 1 },
+]
+
+[[classify.policy.rules]]
+id = "q03_review_unknown_or_low_confidence"
+action = "review_needed"
+priority = 30
+mode = "any"
+review_reason = "Unknown or low-confidence donation classification requires manual review."
+conditions = [
+  { field = "asks_for_donations", op = "eq", value = "unknown" },
+  { field = "confidence", op = "lte", value = 0.7 },
+]
+
+[[classify.policy.rules]]
+id = "q03_review_missing_terms_for_yes"
+action = "review_needed"
+priority = 31
+mode = "all"
+review_reason = "Donation ask marked yes but explicit ask terms are missing."
+conditions = [
+  { field = "asks_for_donations", op = "eq", value = "yes" },
+  { field = "explicit_ask_terms", op = "len_eq", value = 0 },
+]
+
+[[classify.policy.rules]]
+id = "q03_review_terms_present_without_yes"
+action = "review_needed"
+priority = 32
+mode = "all"
+review_reason = "Ask terms are present while classification is no/unknown."
+conditions = [
+  { field = "asks_for_donations", op = "in", value = ["no", "unknown"] },
+  { field = "explicit_ask_terms", op = "len_gte", value = 1 },
+]
+
+[[classify.policy.rules]]
+id = "q03_review_fallback"
+action = "review_needed"
+priority = 40
+mode = "all"
+review_reason = "Fallback routing to manual review."
+conditions = [
+  { field = "confidence", op = "gte", value = 0.0 },
+]
+
+[classify.output]
+strict_output_keys = true
+
+[[classify.output.fields]]
+key = "evidence"
+kind = "object_list"
+max_items = 4
+object_item_keys = ["snippet_id", "quote"]
+
+[[classify.output.fields]]
+key = "explicit_ask_terms"
+kind = "string_list"
+max_items = 6
+unique_casefold = true
+
+[[classify.output.fields]]
+key = "asks_for_donations"
+kind = "string"
+lowercase = true
+allowed = ["yes", "no", "unknown"]
+
+[[classify.output.fields]]
+key = "reason"
+kind = "string"
+
+[[classify.output.fields]]
+key = "confidence"
+kind = "number"
+min = 0.0
+max = 1.0
+
+[classify.review]
+
+[[classify.review.fields]]
+label = "Asks for donations"
+field = "asks_for_donations"
+confidence_field = "confidence"
+
+[[classify.review.fields]]
+label = "Ask terms"
+field = "explicit_ask_terms"
+format = "list"
+
+[[classify.review.fields]]
+label = "Reason"
+field = "reason"
