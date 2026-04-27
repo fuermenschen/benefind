@@ -1,0 +1,200 @@
+[prompt]
+id = "classify.q04_primary_target_group"
+description = "Conservative evidence-only classification of primary beneficiary age/disability grouping"
+template = """
+Classify the primary beneficiary group of one organization using ONLY the provided evidence snippets.
+
+Primary beneficiary group means the people the organization mainly exists to serve, NOT everyone merely mentioned on the site.
+Do not infer facts that are not stated in the snippets.
+If the evidence is weak, vague, or conflicting, be conservative.
+Prefer unknown or lower score over guessing.
+
+Return exactly one valid JSON object.
+Return no markdown, no prose, and no extra keys.
+
+Required keys:
+- category
+- subgroup_labels
+- evidence
+- reason
+- score
+
+Output shape:
+{{
+  "category": "...",
+  "subgroup_labels": [],
+  "evidence": [],
+  "reason": "...",
+  "score": 0.0
+}}
+
+Organization:
+- name: {org_name}
+- location: {org_location}
+
+Allowed category values (choose exactly one string):
+- children_adolescents
+- adults_families
+- people_with_disabilities
+- mixed
+- unknown
+
+category definitions:
+- children_adolescents: primary beneficiaries are mainly children, minors, adolescents, or other people clearly under 18. Use this when the children themselves are the main stated target.
+- adults_families: primary beneficiaries are mainly adults or family/household-based groups, including parents, single mothers, older adults, refugees, migrants, women, or similar adult-centered groups. Use this also when support is framed for families or households rather than explicitly for minors alone.
+- people_with_disabilities: the primary beneficiary group is explicitly defined by disability, impairment, special needs, accessibility needs, or comparable functional limitations. This category overrides age-based categories when disability is the defining focus.
+- mixed: multiple categories are clearly supported as equally primary and no single category is dominant.
+- unknown: insufficient, vague, or conflicting evidence.
+
+subgroup_labels:
+- Array of 0 to 6 unique short snake_case labels.
+- Use labels only when directly supported by the snippets.
+- Use them to capture more specific beneficiary descriptors beneath the main category.
+- These can capture age or other detail under the chosen category.
+- If unsure, use an empty array.
+- Style examples only: refugees, single_mothers, older_adults, families, women, children, adolescents, psychiatric_conditions, autistic_people, wheelchair_users
+
+evidence:
+- Array with 1 to 4 items when score is 0.6 or higher.
+- Empty array is allowed only when score is below 0.6.
+- Each item must be an object with exactly these keys: snippet_id, quote.
+- quote must be a short exact quote copied from a provided snippet.
+- Every snippet_id must match a provided snippet_id.
+
+reason:
+- One short sentence that explains the decisive signal for the chosen category.
+
+score:
+- Number from 0.0 to 1.0.
+- Use lower score for vague, broad, indirect, or conflicting evidence.
+- Score calibration anchors:
+  - 0.8 to 1.0: explicit beneficiary group with at least 2 clear supporting quotes, or 1 exceptionally clear quote.
+  - 0.6 to 0.79: plausible classification with at least 1 clear quote, but some ambiguity.
+  - below 0.6: weak, indirect, generic, mixed, or conflicting support.
+
+Decision rules:
+1. Classify the actual intended beneficiaries, not donors, members, volunteers, staff, or the general public unless they are clearly the direct beneficiaries.
+2. Focus on who is mainly served, not on all people who could indirectly benefit.
+3. If one category is clearly dominant, choose it. Use mixed and unknown sparingly.
+4. Use people_with_disabilities when disability, impairment, special needs, accessibility needs, or comparable functional limitation is the defining target characteristic. This overrides children_adolescents and adults_families.
+5. Do not use people_with_disabilities just because some beneficiaries may also have disabilities, illnesses, or mental health challenges. The snippets must show disability or comparable limitation as a primary focus.
+6. Use children_adolescents only when the snippets clearly indicate beneficiaries are mainly under 18. If "youth" or similar wording is age-ambiguous, lower the score or use unknown unless the context clearly indicates minors.
+7. Use adults_families for adult-centered or family-centered support, including parents, single mothers, elderly people, refugees, migrants, women, or households, unless another category is more clearly primary.
+8. Refugee-focused organizations are often adults_families, but if the snippets do not clearly show adult-dominant beneficiaries (for example equal emphasis on families and children), choose mixed or unknown and lower the score.
+9. Use mixed only when two or more categories are clearly supported as equally primary. Do not use mixed for incidental mentions, edge cases, or because any broad population can include children or people with disabilities.
+10. Generic phrases like "people in need", "vulnerable people", or "disadvantaged persons" are not enough by themselves to distinguish the categories.
+11. If the evidence is insufficient or clearly conflicting, choose unknown and lower the score.
+12. If quotes are not clearly supported, leave them out and lower the score.
+13. Every quote must be verbatim from the snippets.
+14. Return only valid JSON.
+
+Evidence snippets:
+{evidence_snippets}
+"""
+
+[prompt.placeholders]
+org_name = "Organization name"
+org_location = "Organization location (or '-')"
+evidence_snippets = "Prepared snippet list with snippet_id and text"
+
+[prompt.response]
+format = "json_object"
+required_keys = ["category", "subgroup_labels", "evidence", "reason", "score"]
+
+[classify]
+id = "q04_primary_target_group"
+enabled = true
+description = "Primary beneficiary grouping metadata"
+order = 40
+ask_max_attempts = 2
+
+[classify.source]
+kind = "pages_cleaned"
+max_snippets = 18
+max_snippet_chars = 1500
+max_total_snippet_chars = 10000
+min_snippet_chars = 0
+
+[classify.policy]
+
+[[classify.policy.rules]]
+id = "q04_auto_accept_confident"
+action = "auto_accept"
+priority = 10
+mode = "all"
+review_reason = "Confident primary target-group classification with supporting evidence."
+conditions = [
+  { field = "category", op = "not_in", value = ["mixed", "unknown"] },
+  { field = "score", op = "gte", value = 0.75 },
+  { field = "evidence", op = "len_gte", value = 2 },
+]
+
+[[classify.policy.rules]]
+id = "q04_auto_accept_single_evidence_high_score"
+action = "auto_accept"
+priority = 11
+mode = "all"
+review_reason = "High-confidence primary target-group classification with single supporting quote."
+conditions = [
+  { field = "category", op = "not_in", value = ["mixed", "unknown"] },
+  { field = "score", op = "gte", value = 0.8 },
+  { field = "evidence", op = "len_gte", value = 1 },
+]
+
+[[classify.policy.rules]]
+id = "q04_review_fallback"
+action = "review_needed"
+priority = 40
+mode = "all"
+review_reason = "Fallback routing to manual review."
+conditions = [
+  { field = "score", op = "gte", value = 0.0 },
+]
+
+[classify.output]
+strict_output_keys = true
+
+[[classify.output.fields]]
+key = "category"
+kind = "string"
+lowercase = true
+allowed = ["children_adolescents", "adults_families", "people_with_disabilities", "mixed", "unknown"]
+
+[[classify.output.fields]]
+key = "subgroup_labels"
+kind = "string_list"
+lowercase = true
+max_items = 6
+unique_casefold = true
+
+[[classify.output.fields]]
+key = "evidence"
+kind = "object_list"
+max_items = 4
+object_item_keys = ["snippet_id", "quote"]
+
+[[classify.output.fields]]
+key = "reason"
+kind = "string"
+
+[[classify.output.fields]]
+key = "score"
+kind = "number"
+min = 0.0
+max = 1.0
+
+[classify.review]
+
+[[classify.review.fields]]
+label = "Category"
+field = "category"
+confidence_field = "score"
+
+[[classify.review.fields]]
+label = "Subgroups"
+field = "subgroup_labels"
+format = "list"
+
+[[classify.review.fields]]
+label = "Reason"
+field = "reason"
