@@ -4285,6 +4285,7 @@ def classify(
         load_classify_questions,
         load_eligible_org_ids,
         load_registry_lock,
+        manual_ask_once,
         mark_ineligible_for_waiting,
         progressed_question_ids,
         question_columns,
@@ -4636,6 +4637,12 @@ def classify(
         raise typer.BadParameter("Debug flags are only supported for ask/review phases.")
 
     if debug_sample or debug_org_id or debug_org_name:
+        if selected_phase == "ask" and selected_question.execution_mode == "manual":
+            print_warning(
+                "Debug sample for manual ask mode is not supported. "
+                "Run normal ask flow to enter manual payloads."
+            )
+            return
         sample_df = queue_df
         used_seed: int | None = None
 
@@ -4755,9 +4762,102 @@ def classify(
         return
 
     if selected_phase == "ask":
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         stats = {"accepted": 0, "excluded": 0, "review": 0, "errors": 0}
+        if selected_question.execution_mode == "manual":
+            if not interactive:
+                print_warning("Manual ask mode requires interactive terminal.")
+                return
+            if workers != 1:
+                print_warning("Manual ask runs sequentially; ignoring --workers.")
+
+            completed = 0
+            for row_index in queue_indices:
+                row = base_df.loc[row_index]
+                org_id = str(row.get("_org_id", "") or "").strip()
+                org_name = str(row.get(name_column, "") or "").strip()
+                org_location = (
+                    str(row.get(location_column, "") or "").strip() if location_column else ""
+                )
+                website_url = str(row.get("_website_url_final", "") or "").strip() or str(
+                    row.get("_website_url", "") or ""
+                ).strip()
+
+                ask_path = classify_org_dir(org_id, selected_question.id) / "ask.json"
+                existing_ask = read_org_artifact(ask_path)
+                current_payload = existing_ask.get("normalized", {})
+                if not isinstance(current_payload, dict):
+                    current_payload = {}
+
+                manual_result = manual_ask_once(
+                    question=selected_question,
+                    org_name=org_name,
+                    org_location=org_location,
+                    website_url=website_url,
+                    current_payload=current_payload,
+                    allowed_snippet_ids=set(),
+                )
+                if manual_result.status == "quit":
+                    break
+                if manual_result.status == "skip":
+                    stats["errors"] += 1
+                    continue
+                if manual_result.status != "completed" or manual_result.result is None:
+                    stats["errors"] += 1
+                    continue
+
+                result = manual_result.result
+                apply_auto_summary(base_df, row_index, selected_question, result.route)
+                write_org_artifact(
+                    ask_path,
+                    {
+                        "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+                        "question_id": selected_question.id,
+                        "org_id": org_id,
+                        "org_name": org_name,
+                        "source": "manual",
+                        "manual_entry_method": manual_result.entry_method,
+                        "manual_quick_answer_index": manual_result.quick_answer_index,
+                        "route": result.route,
+                        "route_reason": result.route_reason,
+                        "normalized": result.payload,
+                        "prompt": "manual_input",
+                        "raw_response": "",
+                    },
+                )
+                if result.route == "auto_accepted":
+                    stats["accepted"] += 1
+                elif result.route == "auto_excluded":
+                    stats["excluded"] += 1
+                else:
+                    stats["review"] += 1
+
+                completed += 1
+                update_classify_meta(base_df)
+                save_checkpoint()
+                typer.echo(
+                    f"\r[{completed}/{len(queue_indices)}] accepted={stats['accepted']} "
+                    f"excluded={stats['excluded']} review={stats['review']} "
+                    f"errors={stats['errors']}",
+                    nl=False,
+                )
+
+            typer.echo("")
+            print_summary(
+                "Classify Ask Results",
+                [
+                    ("Question", selected_question.id),
+                    ("Execution mode", selected_question.execution_mode),
+                    ("Processed", completed),
+                    ("Auto accepted", stats["accepted"]),
+                    ("Auto excluded", stats["excluded"]),
+                    ("Review needed", stats["review"]),
+                    ("Errors", stats["errors"]),
+                    ("Saved", str(output_path)),
+                ],
+            )
+            return
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
         def run_single(row_index: int) -> dict[str, object]:
             row = base_df.loc[row_index]
@@ -4919,6 +5019,7 @@ def classify(
             "Classify Ask Results",
             [
                 ("Question", selected_question.id),
+                ("Execution mode", selected_question.execution_mode),
                 ("Processed", len(queue_indices)),
                 ("Auto accepted", stats["accepted"]),
                 ("Auto excluded", stats["excluded"]),

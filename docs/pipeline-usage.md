@@ -308,6 +308,12 @@ artifacts for downstream manual analysis.
 `benefind classify` phase model:
 
 - step order is `ask -> review -> conclude`
+- each classify question can run in `execution.mode=llm` (default) or `execution.mode=manual`
+- manual ask mode opens direct field-by-field entry (no extra form-open step)
+- manual ask hotkeys:
+  - `p` opens predefined quick answers; press `1..9` to apply one
+  - `p2` style inline shortcut also works directly in field prompts
+  - summary requires explicit two-step save: press `s`, then confirm with `y`
 - review actions now include proposal updates (`u`) to correct question outputs before accept/exclude
 - review exclude (`x`) prompts for global exclusion reason (`NO_INFORMATION`, `IN_LIQUIDATION`, `NOT_EXIST`, `IRRELEVANT_PURPOSE`, `OTHER` with required note)
 - if your terminal clips top lines during interactive loops, disable screen clears temporarily with `BENEFIND_NO_CLEAR=1`
@@ -319,6 +325,8 @@ artifacts for downstream manual analysis.
   - rows with `_classify_<question>_review_result=excluded`
   - global fields updated: `_excluded_reason`, `_excluded_reason_note`, `_excluded_at`
   - auto-excluded rows keep `_excluded_reason=IRRELEVANT_PURPOSE`; review-excluded rows use the reason selected during classify review
+- manual enrichment questions can opt out of global exclude writes with
+  `classify.conclude.apply_exclusion=false`
 
 `benefind scrape-clean` behavior highlights:
 

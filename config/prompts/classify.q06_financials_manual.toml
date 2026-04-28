@@ -1,0 +1,120 @@
+[prompt]
+id = "classify.q06_financials_manual"
+description = "Manual financial enrichment question"
+template = "Manual question. No LLM prompt is used in execution.mode=manual."
+
+[classify]
+id = "q06_financials_manual"
+enabled = true
+description = "Manual enrichment of annual earnings and donation figures"
+order = 60
+ask_max_attempts = 1
+
+[classify.execution]
+mode = "manual"
+
+[classify.source]
+kind = "pages_cleaned"
+max_snippets = 1
+max_snippet_chars = 200
+min_snippet_chars = 0
+
+[classify.output]
+strict_output_keys = true
+
+[[classify.output.fields]]
+key = "information_status"
+kind = "string"
+lowercase = true
+required = true
+allowed = ["found", "partial", "not_found"]
+
+[[classify.output.fields]]
+key = "fiscal_year"
+kind = "number"
+min = 1900
+max = 2100
+
+[[classify.output.fields]]
+key = "total_earnings_chf"
+kind = "number"
+min = 0
+
+[[classify.output.fields]]
+key = "donated_amount_chf"
+kind = "number"
+min = 0
+
+[[classify.output.fields]]
+key = "source_document_type"
+kind = "string"
+lowercase = true
+required = true
+allowed = ["jahresrechnung", "jahresbericht", "other", "not_found"]
+
+[[classify.output.fields]]
+key = "source_reference"
+kind = "string"
+required = true
+
+[[classify.output.fields]]
+key = "notes"
+kind = "string"
+
+[classify.manual]
+
+[[classify.manual.quick_answers]]
+label = "No information found"
+
+[classify.manual.quick_answers.values]
+information_status = "not_found"
+source_document_type = "not_found"
+source_reference = "manual_search_no_info"
+notes = "No annual report/rechnung with usable financial figures found."
+
+[[classify.manual.quick_answers]]
+label = "Found in Jahresbericht"
+
+[classify.manual.quick_answers.values]
+information_status = "found"
+source_document_type = "jahresbericht"
+
+[[classify.manual.quick_answers]]
+label = "Partial from Jahresrechnung"
+
+[classify.manual.quick_answers.values]
+information_status = "partial"
+source_document_type = "jahresrechnung"
+
+[classify.conclude]
+apply_exclusion = false
+
+[classify.review]
+
+[[classify.review.fields]]
+label = "Information status"
+field = "information_status"
+
+[[classify.review.fields]]
+label = "Fiscal year"
+field = "fiscal_year"
+
+[[classify.review.fields]]
+label = "Total earnings (CHF)"
+field = "total_earnings_chf"
+
+[[classify.review.fields]]
+label = "Donated amount (CHF)"
+field = "donated_amount_chf"
+
+[[classify.review.fields]]
+label = "Source doc"
+field = "source_document_type"
+
+[[classify.review.fields]]
+label = "Source ref"
+field = "source_reference"
+
+[[classify.review.fields]]
+label = "Notes"
+field = "notes"

@@ -22,6 +22,7 @@ from benefind.cli_ui import (
     C_SCORE_HIGH,
     C_SCORE_LOW,
     C_SCORE_MED,
+    C_WARNING,
     ask_select,
     ask_text,
     clear,
@@ -82,6 +83,7 @@ class PolicyRule:
 class OutputFieldConfig:
     key: str
     kind: str
+    required: bool = False
     lowercase: bool = False
     min_value: float | None = None
     max_value: float | None = None
@@ -100,15 +102,24 @@ class ReviewFieldConfig:
 
 
 @dataclass(slots=True)
+class ManualQuickAnswer:
+    label: str
+    values: dict[str, object]
+
+
+@dataclass(slots=True)
 class ClassifyQuestion:
     id: str
     prompt_id: str
     enabled: bool
     order: int
     description: str
+    execution_mode: str
     source: QuestionSourceConfig
     policy_rules: list[PolicyRule]
     output_fields: list[OutputFieldConfig]
+    manual_quick_answers: list[ManualQuickAnswer]
+    conclude_apply_exclusion: bool
     strict_output_keys: bool
     ask_max_attempts: int
     review_fields: list[ReviewFieldConfig]
@@ -124,6 +135,15 @@ class AskResult:
     route: str
     route_reason: str
     error: str
+
+
+@dataclass(slots=True)
+class ManualAskOutcome:
+    status: str
+    result: AskResult | None = None
+    payload: dict[str, object] = field(default_factory=dict)
+    entry_method: str = "sequential"
+    quick_answer_index: int = 0
 
 
 def _slug(value: str) -> str:
@@ -188,6 +208,7 @@ def _parse_output_field(raw: dict) -> OutputFieldConfig:
     return OutputFieldConfig(
         key=key,
         kind=kind,
+        required=bool(raw.get("required", False)),
         lowercase=bool(raw.get("lowercase", False)),
         min_value=float(min_value) if min_value is not None else None,
         max_value=float(max_value) if max_value is not None else None,
@@ -198,6 +219,18 @@ def _parse_output_field(raw: dict) -> OutputFieldConfig:
             str(item).strip() for item in object_item_keys_raw if str(item).strip()
         ],
     )
+
+
+def _parse_manual_quick_answer(raw: dict, *, question_id: str) -> ManualQuickAnswer:
+    label = str(raw.get("label", "") or "").strip()
+    if not label:
+        raise ValueError(f"Classify question '{question_id}' manual quick answer requires label")
+    values_raw = raw.get("values", {})
+    if not isinstance(values_raw, dict) or not values_raw:
+        raise ValueError(
+            f"Classify question '{question_id}' manual quick answer '{label}' requires values table"
+        )
+    return ManualQuickAnswer(label=label, values=dict(values_raw))
 
 
 def _parse_review_field(raw: dict) -> ReviewFieldConfig:
@@ -259,6 +292,21 @@ def load_classify_questions(config_dir: Path | None = None) -> list[ClassifyQues
             if isinstance(classify_raw.get("output", {}), dict)
             else {}
         )
+        execution_raw = (
+            classify_raw.get("execution", {})
+            if isinstance(classify_raw.get("execution", {}), dict)
+            else {}
+        )
+        manual_raw = (
+            classify_raw.get("manual", {})
+            if isinstance(classify_raw.get("manual", {}), dict)
+            else {}
+        )
+        conclude_raw = (
+            classify_raw.get("conclude", {})
+            if isinstance(classify_raw.get("conclude", {}), dict)
+            else {}
+        )
         review_raw = (
             classify_raw.get("review", {})
             if isinstance(classify_raw.get("review", {}), dict)
@@ -273,6 +321,15 @@ def load_classify_questions(config_dir: Path | None = None) -> list[ClassifyQues
         )
         output_fields = [
             _parse_output_field(raw) for raw in output_fields_raw if isinstance(raw, dict)
+        ]
+        quick_answers_raw_value = manual_raw.get("quick_answers", [])
+        quick_answers_raw = (
+            quick_answers_raw_value if isinstance(quick_answers_raw_value, list) else []
+        )
+        manual_quick_answers = [
+            _parse_manual_quick_answer(raw, question_id=qid)
+            for raw in quick_answers_raw
+            if isinstance(raw, dict)
         ]
         review_fields_raw_value = review_raw.get("fields", [])
         review_fields_raw = (
@@ -367,9 +424,12 @@ def load_classify_questions(config_dir: Path | None = None) -> list[ClassifyQues
                 enabled=bool(classify_raw.get("enabled", True)),
                 order=int(classify_raw.get("order", fallback_order) or fallback_order),
                 description=str(classify_raw.get("description", "") or "").strip(),
+                execution_mode=str(execution_raw.get("mode", "llm") or "llm").strip().lower(),
                 source=source,
                 policy_rules=rules,
                 output_fields=output_fields,
+                manual_quick_answers=manual_quick_answers,
+                conclude_apply_exclusion=bool(conclude_raw.get("apply_exclusion", True)),
                 strict_output_keys=bool(output_raw.get("strict_output_keys", False)),
                 ask_max_attempts=(
                     int(classify_raw.get("ask_max_attempts"))
@@ -383,9 +443,14 @@ def load_classify_questions(config_dir: Path | None = None) -> list[ClassifyQues
         )
 
     for question in questions:
-        if not question.prompt_id:
+        if question.execution_mode not in {"llm", "manual"}:
+            raise ValueError(
+                f"Classify question '{question.id}' has invalid execution.mode: "
+                f"{question.execution_mode!r}"
+            )
+        if question.execution_mode == "llm" and not question.prompt_id:
             raise ValueError(f"Classify question '{question.id}' has no prompt.id")
-        if not question.policy_rules:
+        if question.execution_mode == "llm" and not question.policy_rules:
             raise ValueError(f"Classify question '{question.id}' has no policy rules")
         if question.ask_max_attempts <= 0:
             raise ValueError(f"Classify question '{question.id}' has invalid ask_max_attempts")
@@ -891,6 +956,11 @@ def normalize_payload(
             continue
 
         if field_cfg.kind == "number":
+            if raw_value in {None, ""}:
+                if field_cfg.required:
+                    raise ValueError(f"Missing numeric value for '{field_cfg.key}'")
+                output[field_cfg.key] = None
+                continue
             try:
                 number = float(raw_value)
             except (TypeError, ValueError) as e:
@@ -949,9 +1019,31 @@ def normalize_payload(
             output[field_cfg.key] = objects
             continue
 
-        raise ValueError(f"Unsupported output field kind: {field.kind!r}")
+        raise ValueError(f"Unsupported output field kind: {field_cfg.kind!r}")
 
     return output
+
+
+def required_output_keys(question: ClassifyQuestion) -> list[str]:
+    return [field.key for field in question.output_fields if field.required]
+
+
+def validate_required_output_fields(payload: dict[str, object], question: ClassifyQuestion) -> None:
+    for field_cfg in question.output_fields:
+        if not field_cfg.required:
+            continue
+        value = payload.get(field_cfg.key)
+        if field_cfg.kind == "string":
+            if str(value or "").strip() == "":
+                raise ValueError(f"Required field is empty: {field_cfg.key}")
+            continue
+        if field_cfg.kind == "number":
+            if value is None or str(value).strip() == "":
+                raise ValueError(f"Required field is empty: {field_cfg.key}")
+            continue
+        if field_cfg.kind in {"string_list", "object_list"}:
+            if not isinstance(value, list) or not value:
+                raise ValueError(f"Required field has no items: {field_cfg.key}")
 
 
 def _field_value(payload: dict, field: str) -> object:
@@ -1102,6 +1194,7 @@ def classify_once(
         try:
             validate_payload(parsed, question=question, required_keys=required_keys)
             normalized = normalize_payload(parsed, question=question, allowed_snippet_ids=allowed)
+            validate_required_output_fields(normalized, question)
         except ValueError as e:
             last_error = str(e)
             if attempt < question.ask_max_attempts:
@@ -1119,6 +1212,431 @@ def classify_once(
         )
 
     raise ValueError(last_error or "Classify ask failed after retries")
+
+
+def _manual_default_value(field_cfg: OutputFieldConfig) -> object:
+    if field_cfg.kind == "string":
+        return ""
+    if field_cfg.kind == "number":
+        return None
+    if field_cfg.kind in {"string_list", "object_list"}:
+        return []
+    return ""
+
+
+def _manual_seed_payload(
+    question: ClassifyQuestion,
+    current_payload: dict[str, object],
+) -> dict[str, object]:
+    seeded: dict[str, object] = {}
+    for field_cfg in question.output_fields:
+        if field_cfg.key in current_payload:
+            seeded[field_cfg.key] = current_payload[field_cfg.key]
+            continue
+        seeded[field_cfg.key] = _manual_default_value(field_cfg)
+    return seeded
+
+
+def _manual_field_order(question: ClassifyQuestion) -> list[OutputFieldConfig]:
+    required = [field for field in question.output_fields if field.required]
+    optional = [field for field in question.output_fields if not field.required]
+    return required + optional
+
+
+def _manual_format_summary_value(value: object, kind: str) -> str:
+    if kind == "number":
+        if value is None or str(value).strip() == "":
+            return f"[{C_MUTED}]-[/{C_MUTED}]"
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.4f}".rstrip("0").rstrip(".")
+    if kind in {"string_list", "object_list"}:
+        if not isinstance(value, list) or not value:
+            return f"[{C_MUTED}]-[/{C_MUTED}]"
+        if kind == "string_list":
+            return ", ".join(str(item) for item in value)
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return str(value)
+    text = str(value or "").strip()
+    return text if text else f"[{C_MUTED}]-[/{C_MUTED}]"
+
+
+def _manual_parse_field_value(raw_text: str, field_cfg: OutputFieldConfig) -> object:
+    text = str(raw_text or "").strip()
+    if field_cfg.kind == "number":
+        if not text:
+            if field_cfg.required:
+                raise ValueError(f"Required field is empty: {field_cfg.key}")
+            return None
+        try:
+            return float(text)
+        except ValueError as e:
+            raise ValueError(f"Invalid number: {text!r}") from e
+    return _parse_edit_value(text, field_cfg)
+
+
+def _manual_pick_quick_answer(question: ClassifyQuestion) -> tuple[ManualQuickAnswer, int] | None:
+    if not question.manual_quick_answers:
+        print_warning("No quick answers configured for this question.")
+        return None
+    options = question.manual_quick_answers[:9]
+    lines = ["Press 1-9 to apply a predefined answer."]
+    for index, quick_answer in enumerate(options, start=1):
+        lines.append(f"{index}. {quick_answer.label}")
+    lines.append("q. cancel")
+    console.print(make_panel("\n".join(lines), "Quick Answers"))
+    valid = [str(index) for index in range(1, len(options) + 1)] + ["q"]
+    selected = wait_for_key(valid, prompt="Quick answer: ")
+    if selected == "q":
+        return None
+    quick_index = int(selected)
+    return options[quick_index - 1], quick_index
+
+
+def _manual_apply_quick_answer(
+    *,
+    question: ClassifyQuestion,
+    current_payload: dict[str, object],
+    quick_answer: ManualQuickAnswer,
+    allowed_snippet_ids: set[str],
+) -> dict[str, object]:
+    draft = dict(current_payload)
+    draft.update(quick_answer.values)
+    normalized = normalize_payload(
+        draft,
+        question=question,
+        allowed_snippet_ids=allowed_snippet_ids,
+    )
+    validate_required_output_fields(normalized, question)
+    return normalized
+
+
+def _parse_quick_answer_command(
+    command: str,
+    *,
+    max_answers: int,
+) -> int | None:
+    normalized = command.strip().lower()
+    if normalized.startswith(":"):
+        normalized = normalized[1:]
+    if not normalized.startswith("p"):
+        return None
+    suffix = normalized[1:].strip()
+    if suffix == "":
+        return 0
+    if not suffix.isdigit():
+        return None
+    index = int(suffix)
+    if index < 1 or index > min(max_answers, 9):
+        return None
+    return index
+
+
+def manual_ask_once(
+    *,
+    question: ClassifyQuestion,
+    org_name: str,
+    org_location: str,
+    website_url: str,
+    current_payload: dict[str, object],
+    allowed_snippet_ids: set[str],
+) -> ManualAskOutcome:
+    ordered_fields = _manual_field_order(question)
+    if not ordered_fields:
+        return ManualAskOutcome(status="error")
+
+    draft = _manual_seed_payload(question, current_payload)
+    pos = 0
+    quick_answer_used = 0
+    entry_method = "sequential"
+    normalized_payload: dict[str, object] = {}
+
+    def open_url(url: str) -> bool:
+        value = str(url or "").strip()
+        if not value:
+            return False
+        try:
+            return bool(webbrowser.open(value))
+        except Exception:
+            return False
+
+    while pos < len(ordered_fields):
+        field_cfg = ordered_fields[pos]
+        required_text = "required" if field_cfg.required else "optional"
+        default_text = _format_edit_default(draft.get(field_cfg.key), field_cfg.kind)
+        prompt = (
+            f"[{pos + 1}/{len(ordered_fields)}] {field_cfg.key} "
+            f"[{field_cfg.kind}, {required_text}] "
+            "(commands: p quick answers, b back, s skip optional, o open site, f search, q quit)"
+        )
+        entered = ask_text(prompt, default=default_text)
+        command = entered.strip().lower()
+
+        if command in {"q", ":q"}:
+            return ManualAskOutcome(status="quit")
+        if command in {"o", ":o"}:
+            if not website_url:
+                print_warning("No website URL available.")
+            elif open_url(website_url):
+                print_success(f"Opened website: {website_url}")
+            else:
+                print_warning(f"Could not open browser. URL: {website_url}")
+            continue
+        if command in {"f", ":f"}:
+            query = quote_plus(" ".join(part for part in [org_name, org_location] if part).strip())
+            search_url = f"https://www.google.com/search?q={query}"
+            if open_url(search_url):
+                print_success(f"Opened search: {search_url}")
+            else:
+                print_warning(f"Could not open browser. URL: {search_url}")
+            continue
+        if command in {"b", ":b"}:
+            if pos > 0:
+                pos -= 1
+            continue
+        if command in {"s", ":s"}:
+            if field_cfg.required:
+                print_warning("Cannot skip required field.")
+                continue
+            draft[field_cfg.key] = _manual_default_value(field_cfg)
+            pos += 1
+            continue
+        quick_pick = _parse_quick_answer_command(
+            command,
+            max_answers=len(question.manual_quick_answers),
+        )
+        if quick_pick is not None:
+            picked: tuple[ManualQuickAnswer, int] | None = None
+            if quick_pick > 0:
+                idx = quick_pick
+                picked = (question.manual_quick_answers[idx - 1], idx)
+            if picked is None:
+                picked = _manual_pick_quick_answer(question)
+            if picked is None:
+                continue
+            quick_answer, quick_index = picked
+            try:
+                draft = _manual_apply_quick_answer(
+                    question=question,
+                    current_payload=draft,
+                    quick_answer=quick_answer,
+                    allowed_snippet_ids=allowed_snippet_ids,
+                )
+            except ValueError as e:
+                print_warning(str(e))
+                continue
+            quick_answer_used = quick_index
+            entry_method = "quick_answer"
+            pos = len(ordered_fields)
+            break
+
+        try:
+            draft[field_cfg.key] = _manual_parse_field_value(entered, field_cfg)
+        except ValueError as e:
+            print_warning(str(e))
+            continue
+        pos += 1
+
+    while True:
+        try:
+            normalized_payload = normalize_payload(
+                draft,
+                question=question,
+                allowed_snippet_ids=allowed_snippet_ids,
+            )
+            validate_required_output_fields(normalized_payload, question)
+            validation_error = ""
+        except ValueError as e:
+            normalized_payload = {}
+            validation_error = str(e)
+
+        clear()
+        queue_header = (
+            "[bold]Classify Manual Ask[/bold]\n"
+            f"Question: [bold]{question.id}[/bold]\n"
+            f"Org: [{C_PRIMARY}]{org_name or '-'}[/{C_PRIMARY}]"
+        )
+        console.print(make_panel(queue_header, "Manual Entry"))
+
+        rows: list[tuple[str, str]] = []
+        for field_cfg in question.output_fields:
+            rows.append(
+                (
+                    f"{field_cfg.key}{' *' if field_cfg.required else ''}",
+                    _manual_format_summary_value(draft.get(field_cfg.key), field_cfg.kind),
+                )
+            )
+        console.print(make_panel(make_kv_table(rows), "Draft Values"))
+        if validation_error:
+            console.print(
+                make_panel(
+                    f"[{C_WARNING}]{validation_error}[/{C_WARNING}]",
+                    "Validation",
+                )
+            )
+
+        console.print(
+            make_panel(
+                make_actions_table(
+                    [
+                        ("s", "save draft"),
+                        ("e", "edit field"),
+                        ("p", "quick answers"),
+                        ("o", "open website"),
+                        ("f", "search org"),
+                        ("k", "skip org"),
+                        ("q", "quit"),
+                    ]
+                ),
+                "Actions",
+            )
+        )
+        key = wait_for_key(["s", "e", "p", "o", "f", "k", "q"], prompt="Action: ")
+        if key == "q":
+            return ManualAskOutcome(status="quit")
+        if key == "k":
+            return ManualAskOutcome(status="skip")
+        if key == "o":
+            if not website_url:
+                print_warning("No website URL available.")
+            elif open_url(website_url):
+                print_success(f"Opened website: {website_url}")
+            else:
+                print_warning(f"Could not open browser. URL: {website_url}")
+            continue
+        if key == "f":
+            query = quote_plus(" ".join(part for part in [org_name, org_location] if part).strip())
+            search_url = f"https://www.google.com/search?q={query}"
+            if open_url(search_url):
+                print_success(f"Opened search: {search_url}")
+            else:
+                print_warning(f"Could not open browser. URL: {search_url}")
+            continue
+        if key == "p":
+            picked = _manual_pick_quick_answer(question)
+            if picked is None:
+                continue
+            quick_answer, quick_index = picked
+            try:
+                draft = _manual_apply_quick_answer(
+                    question=question,
+                    current_payload=draft,
+                    quick_answer=quick_answer,
+                    allowed_snippet_ids=allowed_snippet_ids,
+                )
+            except ValueError as e:
+                print_warning(str(e))
+                continue
+            quick_answer_used = quick_index
+            entry_method = "quick_answer"
+            continue
+        if key == "e":
+            choices: list[tuple[str, str]] = []
+            for field_cfg in question.output_fields:
+                preview = _manual_format_summary_value(draft.get(field_cfg.key), field_cfg.kind)
+                title = (
+                    f"{field_cfg.key}{' *' if field_cfg.required else ''} "
+                    f"[{field_cfg.kind}] = {preview}"
+                )
+                choices.append((title, field_cfg.key))
+            selected = ask_select(
+                "Select field to edit",
+                choices,
+                default_value=question.output_fields[0].key,
+            )
+            if not selected:
+                continue
+            for idx_field, field_cfg in enumerate(ordered_fields):
+                if field_cfg.key == selected:
+                    pos = idx_field
+                    break
+            while pos < len(ordered_fields):
+                field_cfg = ordered_fields[pos]
+                required_text = "required" if field_cfg.required else "optional"
+                default_text = _format_edit_default(draft.get(field_cfg.key), field_cfg.kind)
+                prompt = (
+                    f"[{pos + 1}/{len(ordered_fields)}] {field_cfg.key} "
+                    f"[{field_cfg.kind}, {required_text}] "
+                    "(commands: p quick answers, b back, s skip optional, q cancel edit)"
+                )
+                entered = ask_text(prompt, default=default_text)
+                command = entered.strip().lower()
+                if command in {"q", ":q"}:
+                    break
+                if command in {"b", ":b"}:
+                    if pos > 0:
+                        pos -= 1
+                    continue
+                if command in {"s", ":s"}:
+                    if field_cfg.required:
+                        print_warning("Cannot skip required field.")
+                        continue
+                    draft[field_cfg.key] = _manual_default_value(field_cfg)
+                    pos += 1
+                    continue
+                quick_pick = _parse_quick_answer_command(
+                    command,
+                    max_answers=len(question.manual_quick_answers),
+                )
+                if quick_pick is not None:
+                    picked: tuple[ManualQuickAnswer, int] | None = None
+                    if quick_pick > 0:
+                        idx = quick_pick
+                        picked = (question.manual_quick_answers[idx - 1], idx)
+                    if picked is None:
+                        picked = _manual_pick_quick_answer(question)
+                    if picked is None:
+                        continue
+                    quick_answer, quick_index = picked
+                    try:
+                        draft = _manual_apply_quick_answer(
+                            question=question,
+                            current_payload=draft,
+                            quick_answer=quick_answer,
+                            allowed_snippet_ids=allowed_snippet_ids,
+                        )
+                    except ValueError as e:
+                        print_warning(str(e))
+                        continue
+                    quick_answer_used = quick_index
+                    entry_method = "quick_answer"
+                    break
+                try:
+                    draft[field_cfg.key] = _manual_parse_field_value(entered, field_cfg)
+                except ValueError as e:
+                    print_warning(str(e))
+                    continue
+                pos += 1
+            continue
+        if key == "s":
+            if validation_error:
+                print_warning("Fix validation errors before saving.")
+                continue
+            confirmation = wait_for_key(["y", "n"], prompt="Confirm save (y/n): ")
+            if confirmation != "y":
+                continue
+            route, route_reason = decide_route(normalized_payload, question)
+            result = AskResult(
+                payload=normalized_payload,
+                raw_response="",
+                prompt="manual_input",
+                route=route,
+                route_reason=route_reason,
+                error="",
+            )
+            return ManualAskOutcome(
+                status="completed",
+                result=result,
+                payload=normalized_payload,
+                entry_method=entry_method,
+                quick_answer_index=quick_answer_used,
+            )
 
 
 def classify_org_dir(org_id: str, question_id: str) -> Path:
@@ -1174,6 +1692,9 @@ def _effective_normalized_payload(ask_payload: dict[str, object]) -> tuple[dict[
 
     normalized = ask_payload.get("normalized", {})
     if isinstance(normalized, dict) and normalized:
+        source = str(ask_payload.get("source", "llm") or "llm").strip().lower()
+        if source in {"manual", "llm"}:
+            return normalized, source
         return normalized, "llm"
     return {}, "none"
 
@@ -1199,7 +1720,7 @@ def _parse_edit_value(raw_value: str, field_cfg: OutputFieldConfig) -> object:
         return text.lower() if field_cfg.lowercase else text
     if field_cfg.kind == "number":
         if not text:
-            raise ValueError("Number fields cannot be empty.")
+            return None
         try:
             return float(text)
         except ValueError as e:
@@ -1305,11 +1826,13 @@ def _prompt_review_payload_edit(
     draft = dict(current_payload)
     draft[field_cfg.key] = parsed_value
     try:
-        return normalize_payload(
+        normalized = normalize_payload(
             draft,
             question=question,
             allowed_snippet_ids=allowed_snippet_ids,
         )
+        validate_required_output_fields(normalized, question)
+        return normalized
     except ValueError as e:
         print_warning(f"Invalid update: {e}")
         return None
@@ -1827,6 +2350,8 @@ def apply_conclude_updates(
     question: ClassifyQuestion,
     eligible_org_ids: set[str],
 ) -> dict[str, int]:
+    if not question.conclude_apply_exclusion:
+        return {"applied_total": 0, "applied_auto_excluded": 0, "applied_review_excluded": 0}
     ensure_text_columns(df, ["_excluded_reason", "_excluded_reason_note", "_excluded_at"])
 
     masks = _question_conclude_masks(df, question, eligible_org_ids)

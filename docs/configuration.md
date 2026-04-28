@@ -7,6 +7,17 @@ All configuration lives in `config/`.
 - `prompts/`: prompt registry files (`*.toml`) with template, placeholder metadata, and response contract
 - `url_scoring.toml`: lexical URL ranking/exclusion rules for `prepare-scraping`
 
+Classify prompt files (`config/prompts/classify.*.toml`) support both LLM and manual ask modes:
+
+- `classify.execution.mode`:
+  - omitted or `llm`: current LLM ask behavior
+  - `manual`: interactive human entry during classify ask phase
+- `classify.output.fields[].required` marks required manual/normalized fields
+- `classify.manual.quick_answers` defines predefined payload templates
+  (`p` then `1..9` in manual ask)
+- `classify.conclude.apply_exclusion=false` prevents conclude from writing
+  global `_excluded_*` fields for enrichment-only questions
+
 For local machine overrides, create:
 
 ```text
