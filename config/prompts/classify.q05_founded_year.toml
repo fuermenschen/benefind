@@ -157,14 +157,23 @@ conditions = [
 ]
 
 [[classify.policy.rules]]
-id = "q05_auto_accept_unknown_low_signal"
-action = "auto_accept"
+id = "q05_review_unknown"
+action = "review_needed"
 priority = 20
 mode = "all"
-review_reason = "No reliable founding-year signal; keep unknown without manual review."
+review_reason = "Unknown founding year requires manual review."
 conditions = [
   { field = "founded_year", op = "eq", value = "unknown" },
-  { field = "score", op = "lte", value = 0.55 },
+]
+
+[[classify.policy.rules]]
+id = "q05_review_low_confidence"
+action = "review_needed"
+priority = 21
+mode = "all"
+review_reason = "Low-confidence founding year extraction requires manual review."
+conditions = [
+  { field = "score", op = "lte", value = 0.6 },
 ]
 
 [[classify.policy.rules]]

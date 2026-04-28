@@ -4492,11 +4492,19 @@ def classify(
 
     selected_question = None
     selected_phase = phase_norm
+
+    def has_conclude_inspection_work(stats: dict[str, int]) -> bool:
+        return any(
+            int(stats.get(key, 0) or 0) > 0
+            for key in ["auto_accepted", "auto_excluded", "review_accepted", "review_excluded"]
+        )
+
     if phase_norm == "auto":
+        # Prefer execution order for ask/review, but default to the latest question
+        # for conclude inspection once all asks/reviews are complete.
         for item in active_questions:
             ask_pending, review_pending = count_phase(base_df, item, eligible_org_ids)
             conclude_stats = summarize_question_for_conclude(base_df, item, eligible_org_ids)
-            conclude_pending = int(conclude_stats.get("concludable_exclusions", 0) or 0)
             if ask_pending > 0:
                 selected_question = item
                 selected_phase = "ask"
@@ -4505,18 +4513,30 @@ def classify(
                 selected_question = item
                 selected_phase = "review"
                 break
-            if conclude_pending > 0 and interactive:
-                selected_question = item
-                selected_phase = "conclude"
-                break
+        if selected_question is None and interactive:
+            for item in reversed(active_questions):
+                ask_pending, review_pending = count_phase(base_df, item, eligible_org_ids)
+                if ask_pending > 0 or review_pending > 0:
+                    continue
+                conclude_stats = summarize_question_for_conclude(base_df, item, eligible_org_ids)
+                if has_conclude_inspection_work(conclude_stats):
+                    selected_question = item
+                    selected_phase = "conclude"
+                    break
     else:
-        for item in active_questions:
+        phase_items = (
+            list(reversed(active_questions)) if phase_norm == "conclude" else active_questions
+        )
+        for item in phase_items:
             ask_pending, review_pending = count_phase(base_df, item, eligible_org_ids)
             conclude_stats = summarize_question_for_conclude(base_df, item, eligible_org_ids)
             conclude_pending = int(conclude_stats.get("concludable_exclusions", 0) or 0)
             if (phase_norm == "ask" and ask_pending > 0) or (
                 phase_norm == "review" and review_pending > 0
-            ) or (phase_norm == "conclude" and conclude_pending > 0):
+            ) or (
+                phase_norm == "conclude"
+                and (conclude_pending > 0 or has_conclude_inspection_work(conclude_stats))
+            ):
                 selected_question = item
                 selected_phase = phase_norm
                 break

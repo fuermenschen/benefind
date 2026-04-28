@@ -34,9 +34,9 @@
       "order": 50,
       "prompt_id": "classify.q05_founded_year",
       "source_path": "/Users/simonmoser/Code/benefind/config/prompts/classify.q05_founded_year.toml",
-      "fingerprint": "919a4419515f3de44fcaacc04aea13feac0428e39ae8e1591bb2973431a0857e"
+      "fingerprint": "60611e66489669743878abcb9b7442328d956cffe7f5da1bae406d4cee35705b"
     }
   ],
   "created_at": "2026-04-24T20:10:55+00:00",
-  "updated_at": "2026-04-28T13:37:17+00:00"
+  "updated_at": "2026-04-28T14:07:25+00:00"
 }
