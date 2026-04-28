@@ -1,0 +1,233 @@
+[prompt]
+id = "classify.q05_founded_year"
+description = "Conservative evidence-only extraction of an organization's founding year"
+template = """
+Classify the founding year of one organization using ONLY the provided evidence snippets and verified purpose text.
+
+Founding year means when this organization itself was founded/established/incorporated, NOT the year of a project, event, campaign, publication, website launch, statute revision, or historical reference.
+Do not infer facts that are not stated in the snippets.
+If the evidence is weak, vague, or conflicting, be conservative.
+Prefer unknown or lower score over guessing.
+
+Return exactly one valid JSON object.
+Return no markdown, no prose, and no extra keys.
+
+Required keys:
+- year_signal
+- candidate_years
+- evidence
+- founded_year
+- reason
+- score
+
+Output shape:
+{{
+  "year_signal": "...",
+  "candidate_years": [],
+  "evidence": [],
+  "founded_year": "...",
+  "reason": "...",
+  "score": 0.0
+}}
+
+Organization:
+- name: {org_name}
+- location: {org_location}
+- verified_purpose: {verified_purpose}
+
+founded_year:
+- Must be either:
+  - a 4-digit year string (YYYY), or
+  - "unknown"
+- Choose exactly one value.
+
+Allowed year_signal values (choose exactly one string):
+- explicit_founded
+- explicit_established
+- explicit_incorporated
+- since_phrase
+- unknown
+
+year_signal definitions:
+- explicit_founded: wording explicitly says founded/created (for example "founded in 1998", "gegründet 1998").
+- explicit_established: wording explicitly says established/formed/created with a year, but without a direct founded keyword.
+- explicit_incorporated: legal registration/incorporation year is explicitly stated for this organization and is used as the best founding proxy.
+- since_phrase: wording such as "since 1998" is used and clearly refers to the organization itself.
+- unknown: no reliable signal.
+
+candidate_years:
+- Array of 0 to 6 unique 4-digit year strings directly mentioned in snippets/purpose and plausibly related to this organization.
+- Include only years that could reasonably be interpreted as organization-level dates.
+- If none are found, use an empty array.
+
+evidence:
+- Array with 1 to 4 items when score is 0.6 or higher.
+- Empty array is allowed only when score is below 0.6.
+- Each item must be an object with exactly these keys: snippet_id, quote.
+- quote must be a short exact quote copied from a provided snippet or verified_purpose.
+- If quoting verified_purpose, use snippet_id "__verified_purpose".
+- Every snippet_id must match a provided snippet_id or "__verified_purpose" when purpose text is present.
+
+reason:
+- One short sentence stating the decisive signal for founded_year.
+
+score:
+- Number from 0.0 to 1.0.
+- Use lower score for vague, indirect, conflicting, or sparse evidence.
+- Score calibration anchors:
+  - 0.8 to 1.0: explicit organization-level founding/established/incorporated signal with clear year, typically with at least 1 strong quote and usually 2.
+  - 0.6 to 0.79: plausible year with one clear signal but limited context (for example a single "since YYYY" statement).
+  - below 0.6: weak, indirect, conflicting, or insufficient signals.
+
+Decision rules:
+1. Extract the year for the organization itself, not for umbrella entities, partner organizations, projects, programs, events, buildings, or beneficiaries.
+2. If multiple years appear, choose the one most explicitly tied to this organization's founding/establishment/incorporation.
+3. If evidence clearly conflicts and cannot be resolved, set founded_year to "unknown", lower score, and explain briefly.
+4. If only umbrella/chapter history is mentioned and this local organization year is not clear, use "unknown".
+5. Use explicit_incorporated only when legal registration/incorporation is clearly about this organization and no better founded signal is available.
+6. Do not infer founded_year from copyright years, article dates, event dates, or generic timelines.
+7. Every quote must be verbatim from provided snippets or verified_purpose.
+8. Return only valid JSON.
+
+Evidence snippets:
+{evidence_snippets}
+"""
+
+[prompt.placeholders]
+org_name = "Organization name"
+org_location = "Organization location (or '-')"
+verified_purpose = "Verified purpose text (or '-')"
+evidence_snippets = "Prepared snippet list with snippet_id and text"
+
+[prompt.response]
+format = "json_object"
+required_keys = ["founded_year", "year_signal", "candidate_years", "evidence", "reason", "score"]
+
+[classify]
+id = "q05_founded_year"
+enabled = true
+description = "Founding year enrichment metadata"
+order = 50
+ask_max_attempts = 2
+
+[classify.source]
+kind = "pages_cleaned"
+max_snippets = 18
+max_snippet_chars = 1500
+max_total_snippet_chars = 10000
+min_snippet_chars = 0
+selection_mode = "keyword_priority"
+
+[classify.source.keyword_priority]
+terms = [
+  "founded",
+  "founding",
+  "established",
+  "establish",
+  "incorporated",
+  "incorporat",
+  "since",
+  "gegründet",
+  "gründung",
+  "gründungsjahr",
+  "seit",
+  "gegruendet",
+  "gruendung",
+  "gruendungsjahr",
+  "gegrundet",
+  "grundung",
+  "grundungsjahr",
+]
+case_sensitive = false
+match_mode = "substring"
+fill_mode = "fallback_file_order"
+
+[classify.policy]
+
+[[classify.policy.rules]]
+id = "q05_auto_accept_confident_known_year"
+action = "auto_accept"
+priority = 10
+mode = "all"
+review_reason = "Confident founding year extraction with supporting evidence."
+conditions = [
+  { field = "founded_year", op = "neq", value = "unknown" },
+  { field = "score", op = "gte", value = 0.75 },
+  { field = "evidence", op = "len_gte", value = 1 },
+]
+
+[[classify.policy.rules]]
+id = "q05_auto_accept_unknown_low_signal"
+action = "auto_accept"
+priority = 20
+mode = "all"
+review_reason = "No reliable founding-year signal; keep unknown without manual review."
+conditions = [
+  { field = "founded_year", op = "eq", value = "unknown" },
+  { field = "score", op = "lte", value = 0.55 },
+]
+
+[[classify.policy.rules]]
+id = "q05_review_fallback"
+action = "review_needed"
+priority = 40
+mode = "all"
+review_reason = "Fallback routing to manual review."
+conditions = [
+  { field = "score", op = "gte", value = 0.0 },
+]
+
+[classify.output]
+strict_output_keys = true
+
+[[classify.output.fields]]
+key = "founded_year"
+kind = "string"
+
+[[classify.output.fields]]
+key = "year_signal"
+kind = "string"
+lowercase = true
+allowed = ["explicit_founded", "explicit_established", "explicit_incorporated", "since_phrase", "unknown"]
+
+[[classify.output.fields]]
+key = "candidate_years"
+kind = "string_list"
+max_items = 6
+unique_casefold = true
+
+[[classify.output.fields]]
+key = "evidence"
+kind = "object_list"
+max_items = 4
+object_item_keys = ["snippet_id", "quote"]
+
+[[classify.output.fields]]
+key = "reason"
+kind = "string"
+
+[[classify.output.fields]]
+key = "score"
+kind = "number"
+min = 0.0
+max = 1.0
+
+[classify.review]
+
+[[classify.review.fields]]
+label = "Founded year"
+field = "founded_year"
+confidence_field = "score"
+
+[[classify.review.fields]]
+label = "Signal"
+field = "year_signal"
+
+[[classify.review.fields]]
+label = "Candidate years"
+field = "candidate_years"
+format = "list"
+
+[[classify.review.fields]]
+label = "Reason"
+field = "reason"

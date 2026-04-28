@@ -28,8 +28,15 @@
       "prompt_id": "classify.q04_primary_target_group",
       "source_path": "/Users/simonmoser/Code/benefind/config/prompts/classify.q04_primary_target_group.toml",
       "fingerprint": "9dd8f9be8bd937b9c4c15d739bec07776550c10363e3a01a965d94150eb736d6"
+    },
+    {
+      "id": "q05_founded_year",
+      "order": 50,
+      "prompt_id": "classify.q05_founded_year",
+      "source_path": "/Users/simonmoser/Code/benefind/config/prompts/classify.q05_founded_year.toml",
+      "fingerprint": "919a4419515f3de44fcaacc04aea13feac0428e39ae8e1591bb2973431a0857e"
     }
   ],
   "created_at": "2026-04-24T20:10:55+00:00",
-  "updated_at": "2026-04-27T21:08:34+00:00"
+  "updated_at": "2026-04-28T13:37:17+00:00"
 }
