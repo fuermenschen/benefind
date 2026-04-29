@@ -45,46 +45,7 @@ key = "donated_amount_chf"
 kind = "number"
 min = 0
 
-[[classify.output.fields]]
-key = "source_document_type"
-kind = "string"
-lowercase = true
-required = true
-allowed = ["jahresrechnung", "jahresbericht", "other", "not_found"]
-
-[[classify.output.fields]]
-key = "source_reference"
-kind = "string"
-required = true
-
-[[classify.output.fields]]
-key = "notes"
-kind = "string"
-
 [classify.manual]
-
-[[classify.manual.quick_answers]]
-label = "No information found"
-
-[classify.manual.quick_answers.values]
-information_status = "not_found"
-source_document_type = "not_found"
-source_reference = "manual_search_no_info"
-notes = "No annual report/rechnung with usable financial figures found."
-
-[[classify.manual.quick_answers]]
-label = "Found in Jahresbericht"
-
-[classify.manual.quick_answers.values]
-information_status = "found"
-source_document_type = "jahresbericht"
-
-[[classify.manual.quick_answers]]
-label = "Partial from Jahresrechnung"
-
-[classify.manual.quick_answers.values]
-information_status = "partial"
-source_document_type = "jahresrechnung"
 
 [classify.conclude]
 apply_exclusion = false
@@ -106,15 +67,3 @@ field = "total_earnings_chf"
 [[classify.review.fields]]
 label = "Donated amount (CHF)"
 field = "donated_amount_chf"
-
-[[classify.review.fields]]
-label = "Source doc"
-field = "source_document_type"
-
-[[classify.review.fields]]
-label = "Source ref"
-field = "source_reference"
-
-[[classify.review.fields]]
-label = "Notes"
-field = "notes"

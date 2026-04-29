@@ -4798,6 +4798,43 @@ def classify(
                 )
                 if manual_result.status == "quit":
                     break
+                if manual_result.status == "excluded":
+                    reason_value = (
+                        manual_result.exclude_reason.value
+                        if manual_result.exclude_reason is not None
+                        else "IRRELEVANT_PURPOSE"
+                    )
+                    note_value = str(manual_result.exclude_reason_note or "").strip()
+                    now = datetime.now(UTC).isoformat(timespec="seconds")
+                    base_df.at[row_index, "_excluded_reason"] = reason_value
+                    base_df.at[row_index, "_excluded_reason_note"] = note_value
+                    base_df.at[row_index, "_excluded_at"] = now
+                    write_org_artifact(
+                        classify_org_dir(org_id, selected_question.id) / "ask.json",
+                        {
+                            "timestamp": now,
+                            "question_id": selected_question.id,
+                            "org_id": org_id,
+                            "org_name": org_name,
+                            "source": "manual",
+                            "manual_entry_method": manual_result.entry_method,
+                            "manual_quick_answer_index": manual_result.quick_answer_index,
+                            "route": "manual_excluded",
+                            "exclusion_reason": reason_value,
+                            "exclusion_reason_note": note_value,
+                        },
+                    )
+                    stats["excluded"] += 1
+                    completed += 1
+                    update_classify_meta(base_df)
+                    save_checkpoint()
+                    typer.echo(
+                        f"\r[{completed}/{len(queue_indices)}] accepted={stats['accepted']} "
+                        f"excluded={stats['excluded']} review={stats['review']} "
+                        f"errors={stats['errors']}",
+                        nl=False,
+                    )
+                    continue
                 if manual_result.status == "skip":
                     stats["errors"] += 1
                     continue

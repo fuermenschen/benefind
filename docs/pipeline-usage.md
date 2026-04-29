@@ -313,6 +313,7 @@ artifacts for downstream manual analysis.
 - manual ask hotkeys:
   - `p` opens predefined quick answers; press `1..9` to apply one
   - `p2` style inline shortcut also works directly in field prompts
+  - `x` excludes the organization immediately with required exclusion reason workflow
   - summary requires explicit two-step save: press `s`, then confirm with `y`
 - review actions now include proposal updates (`u`) to correct question outputs before accept/exclude
 - review exclude (`x`) prompts for global exclusion reason (`NO_INFORMATION`, `IN_LIQUIDATION`, `NOT_EXIST`, `IRRELEVANT_PURPOSE`, `OTHER` with required note)

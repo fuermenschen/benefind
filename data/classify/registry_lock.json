@@ -41,9 +41,9 @@
       "order": 60,
       "prompt_id": "classify.q06_financials_manual",
       "source_path": "/Users/simonmoser/Code/benefind/config/prompts/classify.q06_financials_manual.toml",
-      "fingerprint": "c7b57a98b1fcd054f17fd3d65075b5a7de0b11f9688ed6e7fc492b3d17125687"
+      "fingerprint": "48dec3de8656ad33c51c1632185733ddf296e08f9775b206cddd069ad5435c6f"
     }
   ],
   "created_at": "2026-04-24T20:10:55+00:00",
-  "updated_at": "2026-04-28T19:33:07+00:00"
+  "updated_at": "2026-04-28T20:22:46+00:00"
 }

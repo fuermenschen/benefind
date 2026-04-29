@@ -144,6 +144,8 @@ class ManualAskOutcome:
     payload: dict[str, object] = field(default_factory=dict)
     entry_method: str = "sequential"
     quick_answer_index: int = 0
+    exclude_reason: ExcludeReason | None = None
+    exclude_reason_note: str = ""
 
 
 def _slug(value: str) -> str:
@@ -1366,14 +1368,27 @@ def manual_ask_once(
         except Exception:
             return False
 
+    def show_entry_context(*, stage: str) -> None:
+        clear()
+        rows = [
+            ("Stage", stage),
+            ("Question", question.id),
+            ("Organization", f"[{C_PRIMARY}]{org_name or '-'}[/{C_PRIMARY}]"),
+            ("Location", org_location or f"[{C_MUTED}]-[/{C_MUTED}]"),
+            ("Website", website_url or f"[{C_MUTED}]-[/{C_MUTED}]"),
+        ]
+        console.print(make_panel(make_kv_table(rows), "Classify Manual Ask"))
+
     while pos < len(ordered_fields):
         field_cfg = ordered_fields[pos]
         required_text = "required" if field_cfg.required else "optional"
         default_text = _format_edit_default(draft.get(field_cfg.key), field_cfg.kind)
+        show_entry_context(stage=f"Field {pos + 1}/{len(ordered_fields)}")
         prompt = (
             f"[{pos + 1}/{len(ordered_fields)}] {field_cfg.key} "
             f"[{field_cfg.kind}, {required_text}] "
-            "(commands: p quick answers, b back, s skip optional, o open site, f search, q quit)"
+            "(commands: p quick answers, b back, s skip optional, x exclude, "
+            "o open site, f search, q quit)"
         )
         entered = ask_text(prompt, default=default_text)
         command = entered.strip().lower()
@@ -1407,6 +1422,20 @@ def manual_ask_once(
             draft[field_cfg.key] = _manual_default_value(field_cfg)
             pos += 1
             continue
+        if command in {"x", ":x"}:
+            reason_choice = _prompt_classify_exclusion_reason()
+            if reason_choice is None:
+                continue
+            reason, note = reason_choice
+            if not confirm(f"Exclude as {reason.value}?", default=True):
+                continue
+            return ManualAskOutcome(
+                status="excluded",
+                entry_method=entry_method,
+                quick_answer_index=quick_answer_used,
+                exclude_reason=reason,
+                exclude_reason_note=note,
+            )
         quick_pick = _parse_quick_answer_command(
             command,
             max_answers=len(question.manual_quick_answers),
@@ -1488,6 +1517,7 @@ def manual_ask_once(
                         ("s", "save draft"),
                         ("e", "edit field"),
                         ("p", "quick answers"),
+                        ("x", "exclude org"),
                         ("o", "open website"),
                         ("f", "search org"),
                         ("k", "skip org"),
@@ -1497,7 +1527,7 @@ def manual_ask_once(
                 "Actions",
             )
         )
-        key = wait_for_key(["s", "e", "p", "o", "f", "k", "q"], prompt="Action: ")
+        key = wait_for_key(["s", "e", "p", "x", "o", "f", "k", "q"], prompt="Action: ")
         if key == "q":
             return ManualAskOutcome(status="quit")
         if key == "k":
@@ -1536,6 +1566,20 @@ def manual_ask_once(
             quick_answer_used = quick_index
             entry_method = "quick_answer"
             continue
+        if key == "x":
+            reason_choice = _prompt_classify_exclusion_reason()
+            if reason_choice is None:
+                continue
+            reason, note = reason_choice
+            if not confirm(f"Exclude as {reason.value}?", default=True):
+                continue
+            return ManualAskOutcome(
+                status="excluded",
+                entry_method=entry_method,
+                quick_answer_index=quick_answer_used,
+                exclude_reason=reason,
+                exclude_reason_note=note,
+            )
         if key == "e":
             choices: list[tuple[str, str]] = []
             for field_cfg in question.output_fields:
@@ -1560,10 +1604,11 @@ def manual_ask_once(
                 field_cfg = ordered_fields[pos]
                 required_text = "required" if field_cfg.required else "optional"
                 default_text = _format_edit_default(draft.get(field_cfg.key), field_cfg.kind)
+                show_entry_context(stage=f"Edit field {pos + 1}/{len(ordered_fields)}")
                 prompt = (
                     f"[{pos + 1}/{len(ordered_fields)}] {field_cfg.key} "
                     f"[{field_cfg.kind}, {required_text}] "
-                    "(commands: p quick answers, b back, s skip optional, q cancel edit)"
+                    "(commands: p quick answers, b back, s skip optional, x exclude, q cancel edit)"
                 )
                 entered = ask_text(prompt, default=default_text)
                 command = entered.strip().lower()
@@ -1580,6 +1625,20 @@ def manual_ask_once(
                     draft[field_cfg.key] = _manual_default_value(field_cfg)
                     pos += 1
                     continue
+                if command in {"x", ":x"}:
+                    reason_choice = _prompt_classify_exclusion_reason()
+                    if reason_choice is None:
+                        continue
+                    reason, note = reason_choice
+                    if not confirm(f"Exclude as {reason.value}?", default=True):
+                        continue
+                    return ManualAskOutcome(
+                        status="excluded",
+                        entry_method=entry_method,
+                        quick_answer_index=quick_answer_used,
+                        exclude_reason=reason,
+                        exclude_reason_note=note,
+                    )
                 quick_pick = _parse_quick_answer_command(
                     command,
                     max_answers=len(question.manual_quick_answers),
