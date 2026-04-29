@@ -874,6 +874,10 @@ def count_words(text: str) -> int:
     return len(re.findall(r"\S+", str(text or "").strip()))
 
 
+def _is_q07_word_count_error(error_text: str) -> bool:
+    return str(error_text or "").strip().startswith("summary_de word count out of range:")
+
+
 def _format_facts_list(facts: list[tuple[str, object]]) -> str:
     rows: list[str] = []
     for key, value in facts:
@@ -1241,6 +1245,9 @@ def classify_once(
         allowed.add(VERIFIED_PURPOSE_SNIPPET_ID)
     client = OpenAI()
     last_error = ""
+    first_failed_summary: str = ""
+    first_failed_count: int = 0
+    first_failed_captured = False
     for attempt in range(1, question.ask_max_attempts + 1):
         attempt_prompt = prompt
         if attempt > 1 and last_error:
@@ -1250,6 +1257,19 @@ def classify_once(
                 f"- {last_error}\n"
                 "Please fix this and return one valid JSON object only."
             )
+            if (
+                question.id == "q07_org_summary_de"
+                and first_failed_captured
+                and first_failed_summary
+            ):
+                attempt_prompt = (
+                    f"{attempt_prompt}\n\n"
+                    "Zusatz fuer Korrektur (automatisch gemessen):\n"
+                    f"- Erster Entwurf hatte {first_failed_count} Woerter.\n"
+                    "- Erster Entwurf:\n"
+                    f"{first_failed_summary}\n"
+                    "Bitte liefere eine ueberarbeitete Fassung mit 100 bis 150 Woertern."
+                )
         try:
             response = client.responses.create(
                 model=settings.llm.model,
@@ -1269,14 +1289,45 @@ def classify_once(
             last_error = "LLM did not return a JSON object"
             continue
 
+        normalized: dict[str, object] | None = None
         try:
             validate_payload(parsed, question=question, required_keys=required_keys)
             normalized = normalize_payload(parsed, question=question, allowed_snippet_ids=allowed)
             validate_required_output_fields(normalized, question)
         except ValueError as e:
             last_error = str(e)
-            if attempt < question.ask_max_attempts:
+            is_q07_wc_error = (
+                question.id == "q07_org_summary_de"
+                and normalized is not None
+                and _is_q07_word_count_error(last_error)
+            )
+
+            if is_q07_wc_error and isinstance(normalized, dict) and not first_failed_captured:
+                summary = str(normalized.get("summary_de", "") or "").strip()
+                if summary:
+                    first_failed_summary = summary
+                    first_failed_count = count_words(summary)
+                    first_failed_captured = True
+
+            if attempt < question.ask_max_attempts and (
+                (question.id != "q07_org_summary_de") or is_q07_wc_error
+            ):
                 continue
+
+            if is_q07_wc_error and isinstance(normalized, dict):
+                summary = str(normalized.get("summary_de", "") or "").strip()
+                words = count_words(summary)
+                return AskResult(
+                    payload=normalized,
+                    raw_response=raw_response,
+                    prompt=prompt,
+                    route="needs_review",
+                    route_reason=(
+                        "Summary generated but word count validation failed "
+                        f"({words} words; expected 100-150)."
+                    ),
+                    error="",
+                )
             raise
 
         route, route_reason = decide_route(normalized, question)

@@ -67,7 +67,7 @@ id = "q07_org_summary_de"
 enabled = true
 description = "German organization summary enrichment"
 order = 70
-ask_max_attempts = 2
+ask_max_attempts = 5
 
 [classify.source]
 kind = "pages_cleaned"
