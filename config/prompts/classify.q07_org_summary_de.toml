@@ -1,0 +1,114 @@
+[prompt]
+id = "classify.q07_org_summary_de"
+description = "Deutsche Kurzbeschreibung pro Organisation fuer manuelle Endpruefung"
+template = """
+Erstelle eine praezise, sachliche Organisationsbeschreibung auf Deutsch.
+Nutze nur die bereitgestellten Informationen. Erfinde keine Fakten.
+
+Ziel:
+- Die Beschreibung wird neben separaten Metadaten angezeigt (z. B. Zielgruppe, Website, Ort, Ertragszahlen, Gruendungsjahr).
+- Wiederhole diese Metadaten nicht unnoetig; nenne sie nur, wenn sie den Kontext inhaltlich vertiefen.
+
+Laengenregel:
+- Der Text muss zwischen 100 und 150 Woertern liegen.
+- Zielkorridor: 115 bis 135 Woerter.
+
+Struktur (in dieser Reihenfolge):
+1) Kernauftrag und Nutzenversprechen der Organisation.
+2) Konkrete Angebote, Arbeitsweise oder typische Aktivitaeten.
+3) Spezifische Merkmale der Zielgruppen oder Problemsituation (nur inhaltliche Vertiefung, keine reine Wiederholung von Labels).
+4) Einordnung zu Reichweite/Verankerung/Finanzierungslogik, nur soweit durch Fakten gestuetzt.
+
+Stilregeln:
+- Ein zusammenhaengender Absatz.
+- Neutral, nachvollziehbar, ohne Werbesprache.
+- Keine Aufzaehlung, keine Klammerlisten, keine Zitate.
+- Keine Ich-/Wir-Perspektive.
+- Nenne den Organisationsnamen nicht im Fliesstext (kein exakter Name, keine Wiederholung als Subjekt).
+
+Return exactly one valid JSON object.
+Return no markdown, no prose, and no extra keys.
+
+Required keys:
+- summary_de
+- word_count_self_reported
+
+Output shape:
+{{
+  "summary_de": "...",
+  "word_count_self_reported": 0
+}}
+
+Organisation:
+- Name: {org_name}
+- Ort: {org_location}
+- Zusatzfakten: {org_facts_compact}
+
+Verifizierter Zweck:
+{verified_purpose}
+
+Evidenz-Snippets:
+{evidence_snippets}
+"""
+
+[prompt.placeholders]
+org_name = "Organization name"
+org_location = "Organization location (or '-')"
+org_facts_compact = "Compact structured facts from prior classification"
+verified_purpose = "Verified purpose text (or '-')"
+evidence_snippets = "Prepared snippet list with snippet_id and text"
+
+[prompt.response]
+format = "json_object"
+required_keys = ["summary_de", "word_count_self_reported"]
+
+[classify]
+id = "q07_org_summary_de"
+enabled = true
+description = "German organization summary enrichment"
+order = 70
+ask_max_attempts = 2
+
+[classify.source]
+kind = "pages_cleaned"
+max_snippets = 14
+max_snippet_chars = 2000
+max_total_snippet_chars = 15000
+min_snippet_chars = 80
+
+[classify.policy]
+
+[[classify.policy.rules]]
+id = "q07_review_all"
+action = "review_needed"
+priority = 10
+mode = "all"
+review_reason = "Organisationstexte werden fuer die manuelle Endpruefung bereitgestellt."
+conditions = [
+  { field = "summary_de", op = "exists" },
+]
+
+[classify.output]
+strict_output_keys = true
+
+[[classify.output.fields]]
+key = "summary_de"
+kind = "string"
+required = true
+
+[[classify.output.fields]]
+key = "word_count_self_reported"
+kind = "number"
+required = true
+min = 0
+max = 500
+
+[classify.review]
+
+[[classify.review.fields]]
+label = "Summary (DE)"
+field = "summary_de"
+
+[[classify.review.fields]]
+label = "Word count (self-reported)"
+field = "word_count_self_reported"

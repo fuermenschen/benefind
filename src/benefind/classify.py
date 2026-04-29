@@ -870,6 +870,66 @@ def render_evidence_snippets(snippets: list[dict[str, str]]) -> str:
     return "\n\n".join(rows)
 
 
+def count_words(text: str) -> int:
+    return len(re.findall(r"\S+", str(text or "").strip()))
+
+
+def _format_facts_list(facts: list[tuple[str, object]]) -> str:
+    rows: list[str] = []
+    for key, value in facts:
+        if isinstance(value, list):
+            cleaned = [str(item).strip() for item in value if str(item).strip()]
+            text = ", ".join(cleaned) if cleaned else "-"
+        elif value is None:
+            text = "-"
+        else:
+            text = str(value).strip() or "-"
+        rows.append(f"- {key}: {text}")
+    return "\n".join(rows)
+
+
+def _normalized_for_org_question(org_id: str, question_id: str) -> dict[str, object]:
+    ask_path = classify_org_dir(org_id, question_id) / "ask.json"
+    ask_payload = read_org_artifact(ask_path)
+    normalized, _ = _effective_normalized_payload(ask_payload)
+    return normalized if isinstance(normalized, dict) else {}
+
+
+def build_org_facts_compact(
+    *,
+    org_id: str,
+    org_name: str,
+    org_location: str,
+    website_url: str,
+) -> str:
+    q01 = _normalized_for_org_question(org_id, "q01_target_focus")
+    q02 = _normalized_for_org_question(org_id, "q02_regional_focus")
+    q03 = _normalized_for_org_question(org_id, "q03_donation_ask")
+    q04 = _normalized_for_org_question(org_id, "q04_primary_target_group")
+    q05 = _normalized_for_org_question(org_id, "q05_founded_year")
+    q06 = _normalized_for_org_question(org_id, "q06_financials_manual")
+
+    facts: list[tuple[str, object]] = [
+        ("name", org_name),
+        ("ort", org_location),
+        ("website", website_url),
+        ("q01_primary_focus", q01.get("primary_focus", "")),
+        ("q01_service_mode", q01.get("service_mode", "")),
+        ("q01_subgroups", q01.get("subgroup_labels", [])),
+        ("q02_scope", q02.get("scope", "")),
+        ("q02_locations", q02.get("extracted_locations", [])),
+        ("q03_spendenaufruf", q03.get("asks_for_donations", "")),
+        ("q04_primary_target_group", q04.get("category", "")),
+        ("q04_subgroups", q04.get("subgroup_labels", [])),
+        ("q05_founded_year", q05.get("founded_year", "")),
+        ("q06_finanz_status", q06.get("information_status", "")),
+        ("q06_fiscal_year", q06.get("fiscal_year", None)),
+        ("q06_total_earnings_chf", q06.get("total_earnings_chf", None)),
+        ("q06_donated_amount_chf", q06.get("donated_amount_chf", None)),
+    ]
+    return _format_facts_list(facts)
+
+
 def _extract_json_object(text: str) -> dict:
     stripped = (text or "").strip()
     if not stripped:
@@ -1046,6 +1106,11 @@ def validate_required_output_fields(payload: dict[str, object], question: Classi
         if field_cfg.kind in {"string_list", "object_list"}:
             if not isinstance(value, list) or not value:
                 raise ValueError(f"Required field has no items: {field_cfg.key}")
+    if question.id == "q07_org_summary_de":
+        summary = str(payload.get("summary_de", "") or "").strip()
+        words = count_words(summary)
+        if words < 100 or words > 150:
+            raise ValueError(f"summary_de word count out of range: {words} (expected 100-150)")
 
 
 def _field_value(payload: dict, field: str) -> object:
@@ -1131,6 +1196,7 @@ def classify_once(
     org_location: str,
     verified_purpose: str,
     snippets: list[dict[str, str]],
+    org_facts_compact: str,
     question: ClassifyQuestion,
     settings: Settings,
 ) -> AskResult:
@@ -1148,6 +1214,8 @@ def classify_once(
             template_values[placeholder] = verified_purpose or "-"
         elif placeholder == "evidence_snippets":
             template_values[placeholder] = render_evidence_snippets(snippets)
+        elif placeholder == "org_facts_compact":
+            template_values[placeholder] = org_facts_compact or "-"
         else:
             raise ValueError(
                 f"Prompt '{prompt_def.id}' uses unsupported classify placeholder: {placeholder!r}"
@@ -1174,10 +1242,18 @@ def classify_once(
     client = OpenAI()
     last_error = ""
     for attempt in range(1, question.ask_max_attempts + 1):
+        attempt_prompt = prompt
+        if attempt > 1 and last_error:
+            attempt_prompt = (
+                f"{prompt}\n\n"
+                "Validation feedback from previous attempt:\n"
+                f"- {last_error}\n"
+                "Please fix this and return one valid JSON object only."
+            )
         try:
             response = client.responses.create(
                 model=settings.llm.model,
-                input=prompt,
+                input=attempt_prompt,
                 temperature=float(settings.llm.temperature),
                 max_output_tokens=int(settings.llm.max_tokens),
             )

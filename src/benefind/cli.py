@@ -4270,6 +4270,7 @@ def classify(
 
     from benefind.classify import (
         apply_auto_summary,
+        build_org_facts_compact,
         changed_question_ids,
         classify_lock_path,
         classify_once,
@@ -4670,6 +4671,15 @@ def classify(
         org_name = str(row.get(name_column, "") or "").strip()
         org_location = str(row.get(location_column, "") or "").strip() if location_column else ""
         verified_purpose = str(row.get("_zefix_purpose", "") or "").strip()
+        website_url = str(row.get("_website_url_final", "") or "").strip() or str(
+            row.get("_website_url", "") or ""
+        ).strip()
+        org_facts_compact = build_org_facts_compact(
+            org_id=org_id,
+            org_name=org_name,
+            org_location=org_location,
+            website_url=website_url,
+        )
         snippets = collect_evidence_snippets(org_id, selected_question)
 
         error_message = ""
@@ -4692,6 +4702,7 @@ def classify(
                 org_location,
                 verified_purpose,
                 snippets,
+                org_facts_compact,
                 selected_question,
                 settings,
             )
@@ -4904,6 +4915,15 @@ def classify(
                 str(row.get(location_column, "") or "").strip() if location_column else ""
             )
             verified_purpose = str(row.get("_zefix_purpose", "") or "").strip()
+            website_url = str(row.get("_website_url_final", "") or "").strip() or str(
+                row.get("_website_url", "") or ""
+            ).strip()
+            org_facts_compact = build_org_facts_compact(
+                org_id=org_id,
+                org_name=org_name,
+                org_location=org_location,
+                website_url=website_url,
+            )
             snippets = collect_evidence_snippets(org_id, selected_question)
             if not snippets:
                 return {
@@ -4919,6 +4939,7 @@ def classify(
                     org_location,
                     verified_purpose,
                     snippets,
+                    org_facts_compact,
                     selected_question,
                     settings,
                 )
