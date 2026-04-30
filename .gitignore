@@ -40,3 +40,6 @@ data/orgs/*/
 # But keep .gitkeep files
 !data/**/.gitkeep
 data/classify/conclusions.json
+data/review_packets/pdf/*
+data/review_packets/assets/*
+data/review_packets/export_manifest.csv

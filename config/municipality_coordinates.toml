@@ -1,0 +1,165 @@
+[[municipalities]]
+key = "altikon"
+name = "Altikon"
+lon = 8.7808347
+lat = 47.5733928
+
+[[municipalities]]
+key = "bruetten"
+name = "Bruetten"
+lon = 8.6753241
+lat = 47.4731491
+
+[[municipalities]]
+key = "daegerlen"
+name = "Daegerlen"
+lon = 8.7217683
+lat = 47.5605504
+
+[[municipalities]]
+key = "daettlikon"
+name = "Daettlikon"
+lon = 8.6224807
+lat = 47.5256653
+
+[[municipalities]]
+key = "dinhard"
+name = "Dinhard"
+lon = 8.7681536
+lat = 47.5551982
+
+[[municipalities]]
+key = "elgg"
+name = "Elgg"
+lon = 8.8669115
+lat = 47.4902329
+
+[[municipalities]]
+key = "ellikon_an_der_thur"
+name = "Ellikon an der Thur"
+lon = 8.8242689
+lat = 47.5633514
+
+[[municipalities]]
+key = "elsau"
+name = "Elsau"
+lon = 8.8016078
+lat = 47.5048298
+
+[[municipalities]]
+key = "hagenbuch"
+name = "Hagenbuch"
+lon = 8.8882927
+lat = 47.5205054
+
+[[municipalities]]
+key = "hettlingen"
+name = "Hettlingen"
+lon = 8.7095144
+lat = 47.5467745
+
+[[municipalities]]
+key = "neftenbach"
+name = "Neftenbach"
+lon = 8.6680365
+lat = 47.5281760
+
+[[municipalities]]
+key = "pfungen"
+name = "Pfungen"
+lon = 8.6454232
+lat = 47.5161123
+
+[[municipalities]]
+key = "rickenbach"
+name = "Rickenbach"
+lon = 8.7962716
+lat = 47.5523398
+
+[[municipalities]]
+key = "schlatt"
+name = "Schlatt"
+lon = 8.8207099
+lat = 47.4791041
+
+[[municipalities]]
+key = "seuzach"
+name = "Seuzach"
+lon = 8.7338342
+lat = 47.5345960
+
+[[municipalities]]
+key = "turbenthal"
+name = "Turbenthal"
+lon = 8.8485210
+lat = 47.4368146
+
+[[municipalities]]
+key = "wiesendangen"
+name = "Wiesendangen"
+lon = 8.7889904
+lat = 47.5213051
+
+[[municipalities]]
+key = "winterthur"
+name = "Winterthur"
+lon = 8.7291498
+lat = 47.4991723
+
+[[municipalities]]
+key = "zell"
+name = "Zell"
+lon = 8.8227739
+lat = 47.4480260
+
+[[aliases]]
+alias = "Winti"
+maps_to_key = "winterthur"
+
+[[aliases]]
+alias = "Oberwinterthur"
+maps_to_key = "winterthur"
+
+[[aliases]]
+alias = "Seen"
+maps_to_key = "winterthur"
+
+[[aliases]]
+alias = "Toess"
+maps_to_key = "winterthur"
+
+[[aliases]]
+alias = "Toss"
+maps_to_key = "winterthur"
+
+[[aliases]]
+alias = "Veltheim"
+maps_to_key = "winterthur"
+
+[[aliases]]
+alias = "Wuelflingen"
+maps_to_key = "winterthur"
+
+[[aliases]]
+alias = "Mattenbach"
+maps_to_key = "winterthur"
+
+[[aliases]]
+alias = "Hegi"
+maps_to_key = "winterthur"
+
+[[aliases]]
+alias = "Gotzenwil"
+maps_to_key = "winterthur"
+
+[[aliases]]
+alias = "Raeterschen"
+maps_to_key = "elsau"
+
+[[aliases]]
+alias = "Raterschen"
+maps_to_key = "elsau"
+
+[[aliases]]
+alias = "Rikon"
+maps_to_key = "zell"

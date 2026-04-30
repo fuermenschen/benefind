@@ -5205,6 +5205,99 @@ def review_url_normalization_cmd(
     )
 
 
+@app.command(name="export-review-pdf")
+def export_review_pdf(
+    input_file: Path | None = typer.Option(
+        None,
+        "--input",
+        "-i",
+        help="Path to input CSV (default: filtered/organizations_with_websites.csv)",
+    ),
+    output_dir: Path | None = typer.Option(
+        None,
+        "--output-dir",
+        "-o",
+        help="Directory for generated PDFs (default: data/review_packets/pdf)",
+    ),
+    org_id: str | None = typer.Option(
+        None,
+        "--org-id",
+        help="Export only one organization by _org_id.",
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        help="Export only first N rows after filtering.",
+    ),
+) -> None:
+    """Export print-ready A4 review PDFs for manual final review."""
+    from benefind.review_pdf import export_review_pdfs
+
+    settings = load_settings()
+    _setup_logging(settings.log_level)
+
+    input_path = input_file or (
+        PROJECT_ROOT / "data" / "filtered" / "organizations_with_websites.csv"
+    )
+    export_dir = output_dir or (PROJECT_ROOT / "data" / "review_packets" / "pdf")
+    map_cache_dir = PROJECT_ROOT / "data" / "review_packets" / "assets" / "maps"
+    manifest_path = PROJECT_ROOT / "data" / "review_packets" / "export_manifest.csv"
+
+    if limit is not None and limit <= 0:
+        raise typer.BadParameter("--limit must be greater than 0.")
+
+    if not input_path.exists():
+        print_error(f"Input file not found: {input_path}")
+        raise typer.Exit(code=1)
+
+    df = read_csv_no_infer(input_path)
+    if df.empty:
+        print_warning("Input CSV is empty. Nothing to export.")
+        return
+    if "_org_id" not in df.columns:
+        raise typer.BadParameter("Input CSV has no _org_id column.")
+
+    name_column = _detect_first_column(list(df.columns), NAME_COLUMN_CANDIDATES, default="")
+    if not name_column:
+        raise typer.BadParameter("Could not detect organization name column in input CSV.")
+    if "Name" not in df.columns and name_column != "Name":
+        df["Name"] = df[name_column]
+
+    location_column = _detect_first_column(
+        list(df.columns),
+        ["Sitzort", "Sitz", "Ort"],
+        default="",
+    )
+    if location_column and "Sitzort" not in df.columns:
+        df["Sitzort"] = df[location_column]
+
+    export_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    stats, manifest_df = export_review_pdfs(
+        df,
+        output_dir=export_dir,
+        org_id_filter=org_id,
+        limit=limit,
+        map_cache_dir=map_cache_dir,
+    )
+    manifest_df.to_csv(manifest_path, index=False, encoding="utf-8-sig")
+
+    print_summary(
+        "Review PDF Export",
+        [
+            ("Input rows", stats.total_rows),
+            ("Selected rows", stats.selected_rows),
+            ("PDFs exported", stats.exported),
+            ("Rows failed", stats.failed),
+            ("Maps ok", stats.map_ok),
+            ("Maps missing", stats.map_missing),
+            ("Output dir", str(export_dir)),
+            ("Manifest", str(manifest_path)),
+        ],
+    )
+
+
 @app.command()
 def run() -> None:
     """Run full pipeline steps from parse to scrape-clean."""
