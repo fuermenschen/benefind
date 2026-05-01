@@ -19,8 +19,12 @@ import pandas as pd
 import qrcode
 from PIL import Image, ImageDraw
 from playwright.sync_api import sync_playwright
+from reportlab.graphics.barcode import code128
+from reportlab.lib.colors import Color
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
 from benefind.classify import read_org_artifact
@@ -44,6 +48,12 @@ class MunicipalityRegistry:
     lonlat_by_key: dict[str, tuple[float, float]]
     map_meta: dict[str, float] | None = None
 
+
+@dataclass(frozen=True)
+class PdfFontRoles:
+    label: str
+    content: str
+
 @lru_cache(maxsize=1)
 def _load_review_pdf_config() -> dict[str, object]:
     path = PROJECT_ROOT / "config" / "review_pdf.toml"
@@ -62,6 +72,95 @@ def _cfg(path: str, default: object = None) -> object:
             return default
         cursor = cursor[token]
     return cursor
+
+
+@lru_cache(maxsize=1)
+def _resolve_pdf_fonts() -> PdfFontRoles:
+    font_files = _cfg("typography.font_files", {})
+    if not isinstance(font_files, dict):
+        font_files = {}
+
+    def _find_font_path(candidates: list[str]) -> Path | None:
+        for rel_path in candidates:
+            if not rel_path:
+                continue
+            path = PROJECT_ROOT / rel_path
+            if path.exists():
+                return path
+        return None
+
+    def register_if_present(alias: str, key: str, fallback_candidates: list[str]) -> str | None:
+        configured = str(font_files.get(key, "")).strip()
+        candidates = [configured] if configured else []
+        candidates.extend(fallback_candidates)
+        path = _find_font_path(candidates)
+        if path is None:
+            return None
+        try:
+            pdfmetrics.registerFont(TTFont(alias, str(path)))
+            return alias
+        except Exception:
+            return None
+
+    unna_alias = register_if_present(
+        "Unna",
+        "unna",
+        [
+            "assets/fonts/Unna-Regular.ttf",
+            "assets/fonts/unna/Unna-Regular.ttf",
+            "fonts/Unna-Regular.ttf",
+        ],
+    )
+    dmsans_alias = register_if_present(
+        "DM Sans",
+        "dm_sans",
+        [
+            "assets/fonts/DMSans-Regular.ttf",
+            "assets/fonts/DM Sans Regular.ttf",
+            "assets/fonts/dm-sans/DMSans-Regular.ttf",
+            "assets/fonts/dm-sans/static/DMSans-Regular.ttf",
+            "assets/fonts/dm-sans/DMSans-VariableFont_opsz,wght.ttf",
+            "fonts/DMSans-Regular.ttf",
+        ],
+    )
+
+    fallback_serif_alias = register_if_present(
+        "Source Serif 4",
+        "fallback_serif",
+        [
+            "assets/fonts/SourceSerif4-Regular.ttf",
+            "assets/fonts/source-serif-4/SourceSerif4-Regular.ttf",
+            "assets/fonts/source-serif-4/static/SourceSerif4-Regular.ttf",
+            "fonts/SourceSerif4-Regular.ttf",
+        ],
+    )
+    fallback_sans_alias = register_if_present(
+        "Source Sans 3",
+        "fallback_sans",
+        [
+            "assets/fonts/SourceSans3-Regular.ttf",
+            "assets/fonts/source-sans-3/SourceSans3-Regular.ttf",
+            "assets/fonts/source-sans-3/static/SourceSans3-Regular.ttf",
+            "fonts/SourceSans3-Regular.ttf",
+        ],
+    )
+
+    label_font = str(_cfg("typography.font_label", "Unna")).strip() or "Unna"
+    content_font = str(_cfg("typography.font_content", "DM Sans")).strip() or "DM Sans"
+    serif_fallback = fallback_serif_alias or "Times-Roman"
+    sans_fallback = fallback_sans_alias or "Helvetica"
+
+    if label_font == "Unna" and not unna_alias:
+        label_font = serif_fallback
+    elif label_font == "DM Sans" and not dmsans_alias:
+        label_font = sans_fallback
+
+    if content_font == "DM Sans" and not dmsans_alias:
+        content_font = sans_fallback
+    elif content_font == "Unna" and not unna_alias:
+        content_font = serif_fallback
+
+    return PdfFontRoles(label=label_font, content=content_font)
 
 
 def _clean_text(value: object) -> str:
@@ -556,8 +655,20 @@ def _render_marker_map(
 
             radius_outer = int(_cfg("map.marker.outer_radius_px", 30))
             radius_inner = int(_cfg("map.marker.inner_radius_px", 20))
-            outer_rgba = tuple(_cfg("map.marker.outer_rgba", [255, 255, 255, 255]))
-            inner_rgba = tuple(_cfg("map.marker.inner_rgba", [220, 25, 32, 255]))
+            outer_color = _theme_color_for("map_marker_outer", "100")
+            inner_color = _theme_color_for("map_marker_inner", "700")
+            outer_rgba = (
+                int(round(outer_color.red * 255)),
+                int(round(outer_color.green * 255)),
+                int(round(outer_color.blue * 255)),
+                255,
+            )
+            inner_rgba = (
+                int(round(inner_color.red * 255)),
+                int(round(inner_color.green * 255)),
+                int(round(inner_color.blue * 255)),
+                255,
+            )
             draw.ellipse(
                 [x - radius_outer, y - radius_outer,
                     x + radius_outer, y + radius_outer],
@@ -587,26 +698,197 @@ def _make_qr_image(payload: dict[str, str]) -> ImageReader:
     return ImageReader(buffer)
 
 
+def _crop_transparent_edges(image_bytes: bytes) -> bytes:
+    try:
+        with Image.open(BytesIO(image_bytes)) as raw:
+            img = raw.convert("RGBA")
+            alpha_bbox = img.getchannel("A").getbbox()
+            if not alpha_bbox:
+                return image_bytes
+            cropped = img.crop(alpha_bbox)
+            buffer = BytesIO()
+            cropped.save(buffer, format="PNG")
+            return buffer.getvalue()
+    except Exception:
+        return image_bytes
+
+
+def _load_map_meta(cache_meta_path: Path) -> dict[str, float] | None:
+    if not cache_meta_path.exists():
+        return None
+    try:
+        raw = json.loads(cache_meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    normalized: dict[str, float] = {}
+    for key, value in raw.items():
+        try:
+            normalized[str(key)] = float(value)
+        except Exception:
+            return None
+    return normalized if normalized else None
+
+
+def _save_map_meta(cache_meta_path: Path, map_meta: dict[str, float] | None) -> None:
+    if not isinstance(map_meta, dict) or not map_meta:
+        return
+    payload = {key: float(value) for key, value in map_meta.items()}
+    cache_meta_path.write_text(
+        json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+
 def _draw_corner_markers(c: canvas.Canvas, width: float, height: float) -> None:
     offset = float(_cfg("layout.corner_markers.offset", 16))
     size = float(_cfg("layout.corner_markers.size", 16))
     stroke = float(_cfg("layout.corner_markers.stroke", 1.5))
-    c.setStrokeColorRGB(0, 0, 0)
+    dot_radius = float(_cfg("layout.corner_markers.dot_radius", 1.8))
+    dot_inset = float(_cfg("layout.corner_markers.dot_inset", 5.0))
+    marker_color = _theme_color_for("corner_marker", "600")
+    dot_fill_color = _theme_color_for("corner_dot_fill", "600")
+
+    c.setStrokeColor(marker_color)
+    c.setFillColor(dot_fill_color)
     c.setLineWidth(stroke)
+    c.setLineCap(1)
+    c.setLineJoin(1)
 
-    c.line(offset, height - offset, offset + size, height - offset)
-    c.line(offset, height - offset, offset, height - offset - size)
+    def draw_corner(x: float, y: float, dx: float, dy: float) -> None:
+        path = c.beginPath()
+        path.moveTo(x + (dx * size), y)
+        path.lineTo(x, y)
+        path.lineTo(x, y + (dy * size))
+        c.drawPath(path, stroke=1, fill=0)
 
-    c.line(width - offset, height - offset,
-           width - offset - size, height - offset)
-    c.line(width - offset, height - offset,
-           width - offset, height - offset - size)
+        dot_x = x + (dx * dot_inset)
+        dot_y = y + (dy * dot_inset)
+        c.setFillColor(dot_fill_color)
+        c.circle(dot_x, dot_y, dot_radius, stroke=0, fill=1)
+        c.setLineWidth(stroke)
 
-    c.line(offset, offset, offset + size, offset)
-    c.line(offset, offset, offset, offset + size)
+    draw_corner(offset, height - offset, 1.0, -1.0)
+    draw_corner(width - offset, height - offset, -1.0, -1.0)
+    draw_corner(offset, offset, 1.0, 1.0)
+    draw_corner(width - offset, offset, -1.0, 1.0)
 
-    c.line(width - offset, offset, width - offset - size, offset)
-    c.line(width - offset, offset, width - offset, offset + size)
+
+def _srgb_channel_from_linear(channel: float) -> float:
+    if channel <= 0.0031308:
+        return 12.92 * channel
+    return 1.055 * (channel ** (1.0 / 2.4)) - 0.055
+
+
+def _oklch_to_color(lightness: float, chroma: float, hue: float) -> Color:
+    h_rad = math.radians(hue)
+    a = chroma * math.cos(h_rad)
+    b = chroma * math.sin(h_rad)
+
+    l_ = lightness + 0.3963377774 * a + 0.2158037573 * b
+    m_ = lightness - 0.1055613458 * a - 0.0638541728 * b
+    s_ = lightness - 0.0894841775 * a - 1.2914855480 * b
+
+    l_lin = l_ * l_ * l_
+    m_lin = m_ * m_ * m_
+    s_lin = s_ * s_ * s_
+
+    r_lin = +4.0767416621 * l_lin - 3.3077115913 * m_lin + 0.2309699292 * s_lin
+    g_lin = -1.2684380046 * l_lin + 2.6097574011 * m_lin - 0.3413193965 * s_lin
+    b_lin = -0.0041960863 * l_lin - 0.7034186147 * m_lin + 1.7076147010 * s_lin
+
+    r = max(0.0, min(1.0, _srgb_channel_from_linear(max(0.0, r_lin))))
+    g = max(0.0, min(1.0, _srgb_channel_from_linear(max(0.0, g_lin))))
+    bl = max(0.0, min(1.0, _srgb_channel_from_linear(max(0.0, b_lin))))
+    return Color(r, g, bl)
+
+
+@lru_cache(maxsize=1)
+def _load_review_theme_tokens() -> dict[str, str]:
+    rel = str(_cfg("theme.palette_file", "config/review_pdf_theme.css"))
+    path = PROJECT_ROOT / rel
+    if not path.exists():
+        return {}
+    css = path.read_text(encoding="utf-8")
+    matches = re.findall(r"--([a-z0-9-]+)\s*:\s*([^;]+);", css, flags=re.IGNORECASE)
+    return {name.strip().lower(): value.strip() for name, value in matches}
+
+
+def _color_from_token_value(value: str) -> Color:
+    raw = value.strip().lower()
+    if raw.startswith("#"):
+        hex_value = raw[1:]
+        if len(hex_value) == 3:
+            hex_value = "".join(ch * 2 for ch in hex_value)
+        if len(hex_value) == 6:
+            r = int(hex_value[0:2], 16) / 255.0
+            g = int(hex_value[2:4], 16) / 255.0
+            b = int(hex_value[4:6], 16) / 255.0
+            return Color(r, g, b)
+    match = re.match(
+        r"oklch\(\s*([0-9.]+)%\s+([0-9.]+)\s+([0-9.]+)\s*\)",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        lightness = float(match.group(1)) / 100.0
+        chroma = float(match.group(2))
+        hue = float(match.group(3))
+        return _oklch_to_color(lightness, chroma, hue)
+    return Color(71.0 / 255.0, 85.0 / 255.0, 105.0 / 255.0)
+
+
+def _theme_color_for(element: str, default_shade: str) -> Color:
+    family = str(_cfg("theme.family", "slate")).strip().lower() or "slate"
+    shade = str(_cfg(f"theme.shades.{element}", default_shade)).strip().lower() or default_shade
+    token_name = f"color-{family}-{shade}"
+    tokens = _load_review_theme_tokens()
+    if token_name in tokens:
+        return _color_from_token_value(tokens[token_name])
+    fallback_name = f"color-slate-{default_shade}"
+    if fallback_name in tokens:
+        return _color_from_token_value(tokens[fallback_name])
+    return Color(71.0 / 255.0, 85.0 / 255.0, 105.0 / 255.0)
+
+
+def _theme_named_color(name: str, fallback: Color) -> Color:
+    tokens = _load_review_theme_tokens()
+    token_name = f"color-{name.strip().lower()}"
+    if token_name in tokens:
+        return _color_from_token_value(tokens[token_name])
+    return fallback
+
+
+def _draw_label_box(
+    c: canvas.Canvas,
+    *,
+    text: str,
+    x: float,
+    y_top: float,
+    font_name: str,
+) -> float:
+    cfg = _cfg("layout.labels", {})
+    if not isinstance(cfg, dict):
+        cfg = {}
+    font_size = float(cfg.get("font_size", 8))
+    h_pad = float(cfg.get("padding_x", 6))
+    v_pad = float(cfg.get("padding_y", 2.5))
+    radius = float(cfg.get("radius", 3))
+
+    label = text.strip().upper()
+    text_width = c.stringWidth(label, font_name, font_size)
+    box_w = text_width + (2.0 * h_pad)
+    box_h = font_size + (2.0 * v_pad)
+    y = y_top - box_h
+
+    c.setFillColor(_theme_color_for("label_bg", "700"))
+    c.roundRect(x, y, box_w, box_h, radius, stroke=0, fill=1)
+
+    c.setFillColor(_theme_named_color("white", Color(1, 1, 1)))
+    c.setFont(font_name, font_size)
+    c.drawString(x + h_pad, y + v_pad + 0.4, label)
+    return y
 
 
 def _draw_wrapped_text(
@@ -682,25 +964,13 @@ def _export_single_pdf(
     map_status: str,
     generated_at: str,
 ) -> None:
-    labels = _cfg("labels", {})
+    fonts = _resolve_pdf_fonts()
     fallbacks = _cfg("texts.fallbacks", {})
-    map_box_cfg = _cfg("layout.map_box", {})
-    typo = _cfg("typography", {})
-
-    font_bold = (
-        str(typo.get("font_bold", "Helvetica-Bold"))
-        if isinstance(typo, dict)
-        else "Helvetica-Bold"
+    org_id = _fallback_text(org_row.get("_org_id", ""), str(fallbacks.get("org_id", "unknown")))
+    org_name = _fallback_text(
+        org_row.get("Name", org_row.get("Bezeichnung", "")),
+        str(fallbacks.get("org_title", "Unbekannte Organisation")),
     )
-    font_regular = (
-        str(typo.get("font_regular", "Helvetica"))
-        if isinstance(typo, dict)
-        else "Helvetica"
-    )
-    title_size = int(typo.get("title_size", 17)) if isinstance(typo, dict) else 17
-    meta_size = int(typo.get("meta_size", 9)) if isinstance(typo, dict) else 9
-    section_title_size = int(typo.get("section_title_size", 11)) if isinstance(typo, dict) else 11
-    small_size = int(typo.get("small_size", 8)) if isinstance(typo, dict) else 8
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     c = canvas.Canvas(str(output_path), pagesize=A4)
@@ -709,356 +979,117 @@ def _export_single_pdf(
     _draw_corner_markers(c, page_w, page_h)
 
     margin = float(_cfg("layout.page.margin", 36))
-    c.setTitle(_fallback_text(org_row.get("_org_id", ""), "org"))
-
-    org_id = _fallback_text(org_row.get("_org_id", ""), str(fallbacks.get("org_id", "unknown")))
-    org_name = _fallback_text(
-        org_row.get("Name", org_row.get("Bezeichnung", "")),
-        str(fallbacks.get("org_title", "Unbekannte Organisation")),
-    )
-    location = _fallback_text(
-        org_row.get("Sitzort", org_row.get("Sitz", "")),
-        str(fallbacks.get("location", "Unbekannt")),
-    )
-    website = _fallback_text(
-        org_row.get("_website_url_final", org_row.get("_website_url", "")),
-        str(fallbacks.get("website", "Keine Website erfasst")),
-    )
-
-    q04 = classify_payloads.get("q04_primary_target_group", {})
-    q05 = classify_payloads.get("q05_founded_year", {})
-    q06 = classify_payloads.get("q06_financials_manual", {})
-    q07 = classify_payloads.get("q07_org_summary_de", {})
-
-    group_key = _clean_text(q04.get("category", "")).lower()
-    group_map = _cfg("mappings.target_group", {})
-    fallback_unknown = str(fallbacks.get("unknown", "Unbekannt"))
-    if isinstance(group_map, dict):
-        group_label = str(group_map.get(group_key, fallback_unknown))
-    else:
-        group_label = fallback_unknown
-    subgroup_value = q04.get("subgroup_labels", [])
-    subgroup_text = (
-        ", ".join(str(item).strip()
-                  for item in subgroup_value if str(item).strip())
-        if isinstance(subgroup_value, list)
-        else ""
-    )
-    subgroup_text = subgroup_text or str(fallbacks.get("none", "Keine Angabe"))
-
-    finance_status_key = _clean_text(q06.get("information_status", "")).lower()
-    finance_map = _cfg("mappings.financial_status", {})
-    if isinstance(finance_map, dict):
-        finance_status = str(finance_map.get(finance_status_key, fallback_unknown))
-    else:
-        finance_status = fallback_unknown
-    fiscal_year = _fallback_text(
-        q06.get("fiscal_year", ""),
-        str(fallbacks.get("none", "Keine Angabe")),
-    )
-    total_earnings = _format_chf(q06.get("total_earnings_chf", ""))
-    donated_amount = _format_chf(q06.get("donated_amount_chf", ""))
-    founded_year = _fallback_text(
-        q05.get("founded_year", ""),
-        str(fallbacks.get("none", "Keine Angabe")),
-    )
-
-    reliable_none = str(fallbacks.get("reliable_none", "Keine verlaessliche Angabe"))
-    legal_form = _fallback_text(org_row.get("_legal_form_final", ""), reliable_none)
-    zefix_uid = _fallback_text(
-        org_row.get("_zefix_uid", ""),
-        str(fallbacks.get("none", "Keine Angabe")),
-    )
-    zefix_status = _fallback_text(
-        org_row.get("_zefix_status", ""),
-        str(fallbacks.get("none", "Keine Angabe")),
-    )
-    zefix_purpose = _fallback_text(org_row.get("_zefix_purpose", ""), reliable_none)
-    summary_de = _fallback_text(q07.get("summary_de", ""), reliable_none)
-
-    title_max_chars = int(_cfg("layout.page.title_max_chars", 120))
     title_y = float(_cfg("layout.page.title_y", 50))
-    meta_org_id_y = float(_cfg("layout.page.meta_org_id_y", 66))
-    meta_export_y = float(_cfg("layout.page.meta_export_y", 78))
-    c.setFont(font_bold, title_size)
-    c.drawString(margin, page_h - title_y, org_name[:title_max_chars])
-    c.setFont(font_regular, meta_size)
-    c.drawString(margin, page_h - meta_org_id_y, f"{labels.get('org_id', 'Org ID')}: {org_id}")
-    c.drawString(
-        margin,
-        page_h - meta_export_y,
-        f"{labels.get('export', 'Export')}: {generated_at}",
-    )
-
-    qr_size = float(_cfg("layout.qr.size", 72))
-    qr_y = float(_cfg("layout.qr.y", 86))
-    qr_reader = _make_qr_image(
-        {"org_id": org_id, "v": str(_cfg("texts.qr_version", "review_pdf_v1"))}
-    )
-    c.drawImage(
-        qr_reader,
-        page_w - margin - qr_size,
-        page_h - qr_y,
-        width=qr_size,
-        height=qr_size,
-        mask="auto",
-    )
-
-    top_y = page_h - float(_cfg("layout.page.top_y", 104))
-    section_cfg = _cfg("layout.sections", {})
-    if not isinstance(section_cfg, dict):
-        section_cfg = {}
-    master_height = float(section_cfg.get("master_height", 156))
-    master_title_y = float(section_cfg.get("master_title_y", 18))
-    master_start_y = float(section_cfg.get("master_start_y", 36))
-    target_gap = float(section_cfg.get("target_gap_from_master", 180))
-    target_height = float(section_cfg.get("target_height", 102))
-    target_title_y = float(section_cfg.get("target_title_y", 20))
-    target_start_y = float(section_cfg.get("target_start_y", 38))
-    finance_gap = float(section_cfg.get("finance_gap_from_target", 124))
-    finance_height = float(section_cfg.get("finance_height", 94))
-    finance_title_y = float(section_cfg.get("finance_title_y", 20))
-    finance_start_y = float(section_cfg.get("finance_start_y", 38))
-    summary_gap = float(section_cfg.get("summary_gap_from_finance", 116))
-    summary_height = float(section_cfg.get("summary_height", 114))
-    summary_title_y = float(section_cfg.get("summary_title_y", 20))
-    summary_start_y = float(section_cfg.get("summary_start_y", 38))
-    manual_gap = float(section_cfg.get("manual_gap_from_summary", 136))
-    manual_height = float(section_cfg.get("manual_height", 86))
-    manual_title_y = float(section_cfg.get("manual_title_y", 20))
-    manual_start_y = float(section_cfg.get("manual_start_y", 38))
-    manual_step_y = float(section_cfg.get("manual_check_step_y", 14))
-
-    kv_cfg = _cfg("layout.kv", {})
-    if not isinstance(kv_cfg, dict):
-        kv_cfg = {}
-    gap_after = float(kv_cfg.get("line_gap_after", 3))
-    gap_after_compact = float(kv_cfg.get("line_gap_after_compact", 2))
-    master_value_width = float(kv_cfg.get("master_value_width", 380))
-    target_value_width = float(kv_cfg.get("target_value_width", 420))
-    finance_value_width = float(kv_cfg.get("finance_value_width", 420))
-
-    c.rect(
-        margin,
-        top_y - (master_height + 12),
-        page_w - 2 * margin,
-        master_height,
-        stroke=1,
-        fill=0,
-    )
-    c.setFont(font_bold, section_title_size)
-    c.drawString(margin + 8, top_y - master_title_y, str(labels.get("master", "Stammdaten")))
-    y = top_y - master_start_y
-    y = _draw_kv(
-        c, margin + 8, y, str(labels.get("loc", "Ort")), location, master_value_width
-    ) - gap_after
-    y = _draw_kv(
+    title_size = int(_cfg("typography.title_size", 17))
+    title_leading = float(_cfg("typography.title_leading", title_size * 1.18))
+    label_gap = float(_cfg("layout.labels.gap_below", 8))
+    title_left_offset = float(_cfg("layout.page.title_left_offset", 18))
+    title_width_ratio = float(_cfg("layout.page.title_width_ratio", 0.67))
+    configured_title_font = str(_cfg("typography.font_title", "Unna")).strip() or "Unna"
+    if configured_title_font in pdfmetrics.getRegisteredFontNames():
+        title_font = configured_title_font
+    elif "Unna" in pdfmetrics.getRegisteredFontNames():
+        title_font = "Unna"
+    else:
+        title_font = fonts.label
+    title_text = org_name
+    available_width = page_w - (2.0 * margin)
+    title_width = max(120.0, available_width * max(0.2, min(1.0, title_width_ratio)))
+    title_x = margin + title_left_offset
+    label_top_y = page_h - title_y
+    label_font = fonts.content
+    label_bottom_y = _draw_label_box(
         c,
-        margin + 8,
-        y,
-        str(labels.get("website", "Website")),
-        website,
-        master_value_width,
-    ) - gap_after
-    y = _draw_kv(
-        c,
-        margin + 8,
-        y,
-        str(labels.get("legal_form", "Rechtsform")),
-        legal_form,
-        master_value_width,
-    ) - gap_after
-    y = _draw_kv(
-        c,
-        margin + 8,
-        y,
-        str(labels.get("zefix_uid", "ZEFIX UID")),
-        zefix_uid,
-        master_value_width,
-    ) - gap_after
-    _draw_kv(
-        c,
-        margin + 8,
-        y,
-        str(labels.get("zefix_status", "ZEFIX Status")),
-        zefix_status,
-        master_value_width,
+        text="Name",
+        x=title_x,
+        y_top=label_top_y,
+        font_name=label_font,
     )
+    title_top_y = label_bottom_y - label_gap
 
-    map_x = page_w - margin - float(map_box_cfg.get("x_offset_from_right", 210))
-    map_y = top_y - float(map_box_cfg.get("y_offset_from_top", 156))
-    map_w = float(map_box_cfg.get("width", 200))
-    map_h = float(map_box_cfg.get("height", 118))
-    c.rect(map_x, map_y, map_w, map_h, stroke=1, fill=0)
-    c.setFont(font_bold, meta_size)
-    map_title_y = map_y + map_h - float(map_box_cfg.get("title_offset_y", 12))
-    c.drawString(map_x + 4, map_title_y, str(labels.get("map", "Standort")))
+    map_cfg = _cfg("layout.map_box", {})
+    if not isinstance(map_cfg, dict):
+        map_cfg = {}
+    map_w = float(map_cfg.get("width", 200))
+    map_h = float(map_cfg.get("height", 118))
+    map_top_offset = float(map_cfg.get("top_offset", 0))
+    map_x = page_w - margin - map_w
+    map_y = (page_h - title_y - map_top_offset) - map_h
+
     if map_image_bytes:
-        inner_padding = float(map_box_cfg.get("inner_padding", 3))
-        image_top_padding = float(map_box_cfg.get("image_top_padding", 20))
+        inner_padding = float(map_cfg.get("inner_padding", 3))
+        map_bytes_for_pdf = _crop_transparent_edges(map_image_bytes)
         c.drawImage(
-            ImageReader(BytesIO(map_image_bytes)),
+            ImageReader(BytesIO(map_bytes_for_pdf)),
             map_x + inner_padding,
             map_y + inner_padding,
             width=map_w - (2 * inner_padding),
-            height=map_h - image_top_padding,
+            height=map_h - (2 * inner_padding),
             preserveAspectRatio=True,
             mask="auto",
         )
-    else:
-        c.setFont(font_regular, small_size)
-        c.drawString(map_x + 6, map_y + 12,
-                     f"{fallbacks.get('map_unavailable', 'Karte nicht verfuegbar')} ({map_status})")
 
-    sec2_top = top_y - target_gap
-    c.rect(
-        margin,
-        sec2_top - (target_height + 10),
-        page_w - 2 * margin,
-        target_height,
-        stroke=1,
-        fill=0,
-    )
-    c.setFont(font_bold, section_title_size)
-    c.drawString(
-        margin + 8,
-        sec2_top - target_title_y,
-        str(labels.get("target", "Zielgruppe und Zweck")),
-    )
-    y2 = sec2_top - target_start_y
-    y2 = _draw_kv(
-        c,
-        margin + 8,
-        y2,
-        str(labels.get("target_main", "Hauptzielgruppe")),
-        group_label,
-        420,
-    ) - gap_after_compact
-    y2 = _draw_kv(
-        c,
-        margin + 8,
-        y2,
-        str(labels.get("target_sub", "Untergruppen")),
-        subgroup_text,
-        420,
-    ) - gap_after_compact
-    _draw_kv(
-        c,
-        margin + 8,
-        y2,
-        str(labels.get("purpose", "Verifizierter Zweck")),
-        zefix_purpose,
-        target_value_width,
-    )
+    words = title_text.split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        proposal = word if not current else f"{current} {word}"
+        if c.stringWidth(proposal, title_font, title_size) <= title_width:
+            current = proposal
+            continue
+        if current:
+            lines.append(current)
+            current = word
+        else:
+            lines.append(word)
+            current = ""
+    if current:
+        lines.append(current)
+    if not lines:
+        lines = [title_text]
 
-    sec3_top = sec2_top - finance_gap
-    c.rect(
-        margin,
-        sec3_top - (finance_height + 10),
-        page_w - 2 * margin,
-        finance_height,
-        stroke=1,
-        fill=0,
-    )
-    c.setFont(font_bold, section_title_size)
-    c.drawString(margin + 8, sec3_top - finance_title_y, str(labels.get("finance", "Finanzen")))
-    y3 = sec3_top - finance_start_y
-    y3 = _draw_kv(c, margin + 8, y3, str(labels.get("finance_status", "Informationsstatus")),
-                  finance_status, finance_value_width) - gap_after_compact
-    y3 = _draw_kv(
-        c,
-        margin + 8,
-        y3,
-        str(labels.get("fiscal_year", "Geschaeftsjahr")),
-        fiscal_year,
-        finance_value_width,
-    ) - gap_after_compact
-    y3 = _draw_kv(
-        c,
-        margin + 8,
-        y3,
-        str(labels.get("earnings", "Jahresertrag")),
-        total_earnings,
-        finance_value_width,
-    ) - gap_after_compact
-    y3 = _draw_kv(
-        c,
-        margin + 8,
-        y3,
-        str(labels.get("donations", "Spendenbetrag")),
-        donated_amount,
-        finance_value_width,
-    ) - gap_after_compact
-    _draw_kv(
-        c,
-        margin + 8,
-        y3,
-        str(labels.get("founded", "Gruendungsjahr")),
-        founded_year,
-        finance_value_width,
-    )
+    c.setFont(title_font, title_size)
+    c.setFillColor(_theme_color_for("title", "900"))
+    line_y = title_top_y
+    for line in lines:
+        c.drawString(title_x, line_y, line)
+        line_y -= title_leading
 
-    sec4_top = sec3_top - summary_gap
-    c.rect(
-        margin,
-        sec4_top - (summary_height + 10),
-        page_w - 2 * margin,
-        summary_height,
-        stroke=1,
-        fill=0,
-    )
-    c.setFont(font_bold, section_title_size)
-    c.drawString(
-        margin + 8,
-        sec4_top - summary_title_y,
-        str(labels.get("summary", "Kurzbeschreibung")),
-    )
-    _draw_wrapped_text(
-        c,
-        summary_de,
-        margin + 8,
-        sec4_top - summary_start_y,
-        page_w - 2 * margin - 16,
-        font_regular,
-        meta_size,
-        11,
-        8,
-    )
+    corner_cfg = _cfg("layout.corner_markers", {})
+    if not isinstance(corner_cfg, dict):
+        corner_cfg = {}
+    marker_offset = float(corner_cfg.get("offset", 16))
+    marker_size = float(corner_cfg.get("size", 20))
 
-    sec5_top = sec4_top - manual_gap
-    c.rect(
-        margin,
-        sec5_top - (manual_height + 10),
-        page_w - 2 * margin,
-        manual_height,
-        stroke=1,
-        fill=0,
-    )
-    c.setFont(font_bold, section_title_size)
-    c.drawString(
-        margin + 8,
-        sec5_top - manual_title_y,
-        str(labels.get("manual_review", "Manuelle Endpruefung")),
-    )
-    c.setFont(font_regular, meta_size)
-    checks = labels.get("manual_review_checks", []) if isinstance(labels, dict) else []
-    if not checks:
-        checks = [
-            "Daten plausibel",
-            "Zielgruppe korrekt",
-            "Finanzangaben korrekt/erganzt",
-            "Weiterer Abklaerungsbedarf",
-        ]
-    check_y = sec5_top - manual_start_y
-    for item in checks:
-        c.rect(margin + 8, check_y - 3, 8, 8, stroke=1, fill=0)
-        c.drawString(margin + 22, check_y - 1, item)
-        check_y -= manual_step_y
+    barcode_cfg = _cfg("layout.barcode", {})
+    if not isinstance(barcode_cfg, dict):
+        barcode_cfg = {}
+    module_width = float(barcode_cfg.get("module_width", 0.42))
+    side_gap = float(barcode_cfg.get("side_gap", 18))
 
-    c.setFont(font_regular, small_size)
-    footer_y = float(_cfg("layout.footer.y", 24))
-    c.drawString(margin, footer_y, str(_cfg("texts.packet_version", "benefind review packet v1")))
-    c.drawRightString(page_w - margin, footer_y, f"Map: {map_status}")
+    bar_height = marker_size
+    y = marker_offset
+
+    target_width = max(40.0, page_w - (2.0 * (marker_offset + marker_size + side_gap)))
+    marker_color = _theme_color_for("barcode", "600")
+    barcode = code128.Code128(
+        org_id,
+        barHeight=bar_height,
+        barWidth=module_width,
+        barFillColor=marker_color,
+    )
+    if barcode.width > 0:
+        fitted_module_width = module_width * (target_width / barcode.width)
+        module_width = max(0.28, min(1.2, fitted_module_width))
+        barcode = code128.Code128(
+            org_id,
+            barHeight=bar_height,
+            barWidth=module_width,
+            barFillColor=marker_color,
+        )
+
+    x = (page_w - barcode.width) / 2.0
+    barcode.drawOn(c, x, y)
 
     c.showPage()
     c.save()
@@ -1103,11 +1134,28 @@ def export_review_pdfs(
     zoom_cache_suffix = f"_z{zoom_override:.2f}" if zoom_override is not None else ""
     base_map_cache = map_cache_dir / \
         f"_base_map_winterthur_masked{zoom_cache_suffix}.png"
+    base_map_meta_cache = map_cache_dir / \
+        f"_base_map_winterthur_masked{zoom_cache_suffix}.meta.json"
     base_map_bytes: bytes | None = None
     if base_map_cache.exists():
         cached_base = base_map_cache.read_bytes()
         if _is_usable_map_image(cached_base):
             base_map_bytes = cached_base
+    if base_map_bytes is not None and not isinstance(registry.map_meta, dict):
+        cached_meta = _load_map_meta(base_map_meta_cache)
+        if cached_meta:
+            registry.map_meta = cached_meta
+    if base_map_bytes is not None and not isinstance(registry.map_meta, dict):
+        fetched_for_meta = _fetch_base_map_bytes(
+            registry,
+            width=int(_cfg("map.width_px", 900)),
+            height=int(_cfg("map.height_px", 500)),
+            zoom_override=zoom_override,
+        )
+        if fetched_for_meta and _is_usable_map_image(fetched_for_meta):
+            base_map_bytes = fetched_for_meta
+            base_map_cache.write_bytes(fetched_for_meta)
+            _save_map_meta(base_map_meta_cache, registry.map_meta)
     if base_map_bytes is None:
         fetched_base = _fetch_base_map_bytes(
             registry,
@@ -1118,6 +1166,9 @@ def export_review_pdfs(
         if fetched_base and _is_usable_map_image(fetched_base):
             base_map_bytes = fetched_base
             base_map_cache.write_bytes(fetched_base)
+            _save_map_meta(base_map_meta_cache, registry.map_meta)
+    elif isinstance(registry.map_meta, dict):
+        _save_map_meta(base_map_meta_cache, registry.map_meta)
 
     for _, row in base.iterrows():
         org_id = _clean_text(row.get("_org_id", ""))
@@ -1141,7 +1192,11 @@ def export_review_pdfs(
         }
 
         location = _clean_text(row.get("Sitzort", row.get("Sitz", "")))
-        cache_path = map_cache_dir / f"{org_id}.png"
+        marker_outer = str(_cfg("theme.shades.map_marker_outer", "100")).strip()
+        marker_inner = str(_cfg("theme.shades.map_marker_inner", "700")).strip()
+        marker_family = str(_cfg("theme.family", "slate")).strip().lower() or "slate"
+        marker_cache_suffix = f"_{marker_family}_{marker_outer}_{marker_inner}"
+        cache_path = map_cache_dir / f"{org_id}{marker_cache_suffix}.png"
         map_bytes: bytes | None = None
         map_status = "ok"
 
@@ -1154,15 +1209,19 @@ def export_review_pdfs(
         elif cache_path.exists():
             cached = cache_path.read_bytes()
             if _is_usable_map_image(cached):
-                map_bytes = cached
+                cropped_cached = _crop_transparent_edges(cached)
+                map_bytes = cropped_cached
+                if cropped_cached != cached:
+                    cache_path.write_bytes(cropped_cached)
             else:
                 marker = registry.lonlat_by_key.get(muni_key)
                 if marker:
                     rendered = _render_marker_map(
                         base_map_bytes, registry, marker)
                     if rendered and _is_usable_map_image(rendered):
-                        map_bytes = rendered
-                        cache_path.write_bytes(rendered)
+                        cropped_rendered = _crop_transparent_edges(rendered)
+                        map_bytes = cropped_rendered
+                        cache_path.write_bytes(cropped_rendered)
                     else:
                         map_status = "marker_render_failed"
                 else:
@@ -1172,8 +1231,9 @@ def export_review_pdfs(
             if marker:
                 rendered = _render_marker_map(base_map_bytes, registry, marker)
                 if rendered and _is_usable_map_image(rendered):
-                    map_bytes = rendered
-                    cache_path.write_bytes(rendered)
+                    cropped_rendered = _crop_transparent_edges(rendered)
+                    map_bytes = cropped_rendered
+                    cache_path.write_bytes(cropped_rendered)
                 else:
                     map_status = "marker_render_failed"
             else:

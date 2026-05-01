@@ -20,130 +20,62 @@ sr = 4326
 [map.marker]
 outer_radius_px = 30
 inner_radius_px = 20
-outer_rgba = [255, 255, 255, 255]
-inner_rgba = [220, 25, 32, 255]
 
 [layout.page]
 margin = 36
-title_max_chars = 120
 title_y = 50
-meta_org_id_y = 66
-meta_export_y = 78
-top_y = 104
-
-[layout.qr]
-size = 72
-y = 86
+title_left_offset = 28
+title_width_ratio = 0.66
 
 [layout.map_box]
-x_offset_from_right = 210
-y_offset_from_top = 156
 width = 200
 height = 118
 inner_padding = 3
-title_offset_y = 12
-image_top_padding = 20
+top_offset = 0
 
 [layout.corner_markers]
 offset = 16
 size = 16
-stroke = 1.5
+stroke = 2.0
+dot_radius = 1.7
+dot_inset = 5.0
 
-[layout.sections]
-master_height = 156
-master_title_y = 18
-master_start_y = 36
-target_gap_from_master = 180
-target_height = 102
-target_title_y = 20
-target_start_y = 38
-finance_gap_from_target = 124
-finance_height = 94
-finance_title_y = 20
-finance_start_y = 38
-summary_gap_from_finance = 116
-summary_height = 114
-summary_title_y = 20
-summary_start_y = 38
-manual_gap_from_summary = 136
-manual_height = 86
-manual_title_y = 20
-manual_start_y = 38
-manual_check_step_y = 14
+[layout.barcode]
+module_width = 0.42
+side_gap = 18
 
-[layout.kv]
-value_offset_x = 110
-line_gap_after = 3
-line_gap_after_compact = 2
-leading = 11
-max_lines = 3
-master_value_width = 380
-target_value_width = 420
-finance_value_width = 420
+[layout.labels]
+font_size = 8
+padding_x = 6
+padding_y = 2.5
+radius = 3
+gap_below = 18
 
-[layout.footer]
-y = 24
+[theme]
+palette_file = "config/review_pdf_theme.css"
+family = "amber"
+
+[theme.shades]
+corner_marker = "950"
+corner_dot_fill = "950"
+barcode = "950"
+title = "950"
+label_bg = "700"
+map_marker_outer = "700"
+map_marker_inner = "200"
 
 [typography]
-font_regular = "Helvetica"
-font_bold = "Helvetica-Bold"
+font_label = "Unna"
+font_content = "DM Sans"
+font_title = "Unna"
 title_size = 17
-meta_size = 9
-section_title_size = 11
-small_size = 8
 
-[texts]
-packet_version = "benefind review packet v1"
-qr_version = "review_pdf_v1"
+[typography.font_files]
+unna = "assets/fonts/Unna-Regular.ttf"
+dm_sans = "assets/fonts/DMSans-Regular.ttf"
+fallback_serif = "assets/fonts/SourceSerif4-Regular.ttf"
+fallback_sans = "assets/fonts/SourceSans3-Regular.ttf"
 
 [texts.fallbacks]
 org_title = "Unbekannte Organisation"
 org_id = "unknown"
-location = "Unbekannt"
-website = "Keine Website erfasst"
-unknown = "Unbekannt"
-none = "Keine Angabe"
-reliable_none = "Keine verlaessliche Angabe"
-map_unavailable = "Karte nicht verfuegbar"
-
-[labels]
-org_id = "Org ID"
-export = "Export"
-map = "Standort"
-master = "Stammdaten"
-target = "Zielgruppe und Zweck"
-finance = "Finanzen"
-summary = "Kurzbeschreibung"
-manual_review = "Manuelle Endpruefung"
-loc = "Ort"
-website = "Website"
-legal_form = "Rechtsform"
-zefix_uid = "ZEFIX UID"
-zefix_status = "ZEFIX Status"
-target_main = "Hauptzielgruppe"
-target_sub = "Untergruppen"
-purpose = "Verifizierter Zweck"
-finance_status = "Informationsstatus"
-fiscal_year = "Geschaeftsjahr"
-earnings = "Jahresertrag"
-donations = "Spendenbetrag"
-founded = "Gruendungsjahr"
-
-manual_review_checks = [
-  "Daten plausibel",
-  "Zielgruppe korrekt",
-  "Finanzangaben korrekt/erganzt",
-  "Weiterer Abklaerungsbedarf",
-]
-
-[mappings.target_group]
-children_adolescents = "Kinder und Jugendliche"
-adults_families = "Erwachsene und Familien"
-people_with_disabilities = "Menschen mit Behinderungen"
-mixed = "Gemischte Zielgruppen"
-unknown = "Unbekannt"
-
-[mappings.financial_status]
-found = "Vollstaendig erhoben"
-partial = "Teilweise erhoben"
-not_found = "Nicht gefunden"
