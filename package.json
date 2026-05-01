@@ -1,0 +1,17 @@
+{
+  "name": "benefind-review-pdf-preview",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run review-pdf:context && vite --config vite.review-pdf.config.mjs",
+    "build": "uv run benefind export-review-pdf",
+    "review-pdf:context": "uv run python scripts/review_pdf_preview_context.py",
+    "review-pdf:dev": "vite --config vite.review-pdf.config.mjs",
+    "review-pdf:build": "vite build --config vite.review-pdf.config.mjs",
+    "review-pdf:export": "uv run benefind export-review-pdf"
+  },
+  "devDependencies": {
+    "nunjucks": "^3.2.4",
+    "vite": "^5.4.10"
+  }
+}

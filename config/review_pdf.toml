@@ -11,6 +11,7 @@ pad_lat = 0.02
 render_wait_ms = 350
 render_timeout_ms = 20000
 probe_vector_tile = true
+projection_meta_version = 2
 
 [map.boundary]
 layer_id = "ch.swisstopo.swissboundaries3d-bezirk-flaeche.fill"
@@ -20,61 +21,11 @@ sr = 4326
 [map.marker]
 outer_radius_px = 30
 inner_radius_px = 20
+outer_color = "#ea580c"
+inner_color = "#9a3412"
 
-[layout.page]
-margin = 36
-title_y = 50
-title_left_offset = 28
-title_width_ratio = 0.66
-
-[layout.map_box]
-width = 200
-height = 118
-inner_padding = 3
-top_offset = 0
-
-[layout.corner_markers]
-offset = 16
-size = 16
-stroke = 2.0
-dot_radius = 1.7
-dot_inset = 5.0
-
-[layout.barcode]
-module_width = 0.42
-side_gap = 18
-
-[layout.labels]
-font_size = 8
-padding_x = 6
-padding_y = 2.5
-radius = 3
-gap_below = 18
-
-[theme]
-palette_file = "config/review_pdf_theme.css"
-family = "amber"
-
-[theme.shades]
-corner_marker = "950"
-corner_dot_fill = "950"
-barcode = "950"
-title = "950"
-label_bg = "700"
-map_marker_outer = "700"
-map_marker_inner = "200"
-
-[typography]
-font_label = "Unna"
-font_content = "DM Sans"
-font_title = "Unna"
-title_size = 17
-
-[typography.font_files]
-unna = "assets/fonts/Unna-Regular.ttf"
-dm_sans = "assets/fonts/DMSans-Regular.ttf"
-fallback_serif = "assets/fonts/SourceSerif4-Regular.ttf"
-fallback_sans = "assets/fonts/SourceSans3-Regular.ttf"
+[template]
+html_file = "config/review_pdf_template.html"
 
 [texts.fallbacks]
 org_title = "Unbekannte Organisation"
