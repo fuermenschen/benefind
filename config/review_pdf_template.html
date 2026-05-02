@@ -1,41 +1,219 @@
 <!doctype html>
 <html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-</head>
-<body class="m-0 p-0 bg-slate-300">
-  <div class="min-h-screen box-border flex items-start justify-center p-6">
-    <section class="box-border w-[210mm] min-h-[297mm] bg-white border border-slate-400 shadow-2xl p-6">
-      <h1 class="text-2xl font-semibold text-slate-900">Hello review PDF</h1>
-      <p class="mt-3 text-sm text-slate-700">Org: {{ org.id }}</p>
-      <p class="text-sm text-slate-700">Map status: {{ map.status }}</p>
-      <div class="mt-4 flex flex-wrap gap-2">
-        <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800">Sample Label</span>
-        {% if map.has_image %}
-          <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800">Map Ready</span>
-        {% else %}
-          <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800">Map Missing</span>
-        {% endif %}
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style>
+      @page {
+        size: A4;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body
+    class="m-0 p-0 print:w-[210mm] print:h-[297mm] print:bg-white min-h-screen bg-slate-300 p-6 flex justify-center items-start"
+  >
+    <div
+      class="w-[210mm] h-[297mm] overflow-hidden bg-white p-20 text-slate-900 font-serif relative shadow-2xl shadow-slate-900/35 border border-slate-400 print:shadow-none print:border-none"
+    >
+      <div class="h-full pb-56">
+        <!-- Top section with reserved map space -->
+        <div class="relative min-h-[7rem] pr-[11rem]">
+          <!-- Header Section -->
+          <div>
+            <h1 class="text-3xl font-bold mb-5 text-pretty">{{ org.name }}</h1>
+            <div class="flex space-x-5 space-y-2 font-sans italic flex-wrap">
+              <span class="text-sm text-amber-700 flex space-x-1">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  class="size-5"
+                >
+                  <path
+                    fill-rule="evenodd"
+                    d="m9.69 18.933.003.001C9.89 19.02 10 19 10 19s.11.02.308-.066l.002-.001.006-.003.018-.008a5.741 5.741 0 0 0 .281-.14c.186-.096.446-.24.757-.433.62-.384 1.445-.966 2.274-1.765C15.302 14.988 17 12.493 17 9A7 7 0 1 0 3 9c0 3.492 1.698 5.988 3.355 7.584a13.731 13.731 0 0 0 2.273 1.765 11.842 11.842 0 0 0 .976.544l.062.029.018.008.006.003ZM10 11.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z"
+                    clip-rule="evenodd"
+                  />
+                </svg>
+                <span> {{ org.location }} </span>
+              </span>
+              <span class="text-sm text-amber-700 flex space-x-1">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  class="size-5"
+                >
+                  <path
+                    fill-rule="evenodd"
+                    d="M4.606 12.97a.75.75 0 0 1-.134 1.051 2.494 2.494 0 0 0-.93 2.437 2.494 2.494 0 0 0 2.437-.93.75.75 0 1 1 1.186.918 3.995 3.995 0 0 1-4.482 1.332.75.75 0 0 1-.461-.461 3.994 3.994 0 0 1 1.332-4.482.75.75 0 0 1 1.052.134Z"
+                    clip-rule="evenodd"
+                  />
+                  <path
+                    fill-rule="evenodd"
+                    d="M5.752 12A13.07 13.07 0 0 0 8 14.248v4.002c0 .414.336.75.75.75a5 5 0 0 0 4.797-6.414 12.984 12.984 0 0 0 5.45-10.848.75.75 0 0 0-.735-.735 12.984 12.984 0 0 0-10.849 5.45A5 5 0 0 0 1 11.25c.001.414.337.75.751.75h4.002ZM13 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"
+                    clip-rule="evenodd"
+                  />
+                </svg>
+                <span>
+                  {% if classify_payloads.q05.founded_year != "unknown"%} {{
+                  classify_payloads.q05.founded_year }} {% else %} Gründungsjahr
+                  unbekannt {% endif %}
+                </span>
+              </span>
+              <a href="{{org.website_url}}" target="_blank">
+                <span class="text-sm italic text-amber-700 flex space-x-1">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    class="size-5"
+                  >
+                    <path
+                      d="M12.232 4.232a2.5 2.5 0 0 1 3.536 3.536l-1.225 1.224a.75.75 0 0 0 1.061 1.06l1.224-1.224a4 4 0 0 0-5.656-5.656l-3 3a4 4 0 0 0 .225 5.865.75.75 0 0 0 .977-1.138 2.5 2.5 0 0 1-.142-3.667l3-3Z"
+                    />
+                    <path
+                      d="M11.603 7.963a.75.75 0 0 0-.977 1.138 2.5 2.5 0 0 1 .142 3.667l-3 3a2.5 2.5 0 0 1-3.536-3.536l1.225-1.224a.75.75 0 0 0-1.061-1.06l-1.224 1.224a4 4 0 1 0 5.656 5.656l3-3a4 4 0 0 0-.225-5.865Z"
+                    />
+                  </svg>
+                  <span> {{ org.website_url }} </span>
+                </span>
+              </a>
+              <span class="text-sm text-amber-700 flex space-x-1">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  class="size-5"
+                >
+                  <path
+                    d="M7 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM14.5 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM1.615 16.428a1.224 1.224 0 0 1-.569-1.175 6.002 6.002 0 0 1 11.908 0c.058.467-.172.92-.57 1.174A9.953 9.953 0 0 1 7 18a9.953 9.953 0 0 1-5.385-1.572ZM14.5 16h-.106c.07-.297.088-.611.048-.933a7.47 7.47 0 0 0-1.588-3.755 4.502 4.502 0 0 1 5.874 2.636.818.818 0 0 1-.36.98A7.465 7.465 0 0 1 14.5 16Z"
+                  />
+                </svg>
+                <span>
+                  {% if classify_payloads.q04.category == "adults_families"%}
+                  Erwachsene / Familien {% elif classify_payloads.q04.category
+                  == "children_adolescents" %} Kinder / Jugendliche {% elif
+                  classify_payloads.q04.category == "mixed" %} Gemischte
+                  Zielgruppe {% elif classify_payloads.q04.category ==
+                  "people_with_disabilities" %} Menschen mit Behinderungen {%
+                  else %} {{classify_payloads.q04.category}} {% endif %}
+                </span>
+              </span>
+            </div>
+          </div>
+
+          <!-- Map Image Section -->
+          <div class="absolute w-50 -right-10 -top-10">
+            <img src="{{ map.data_uri }}" alt="Map Image" />
+          </div>
+        </div>
+
+        <!-- Description Section -->
+        <div class="mt-6 text-justify hyphens-auto" lang="de">
+          <p class="text-sm text-slate-700">{{ org.description }}</p>
+          <p class="text-sm text-slate-700 mt-6">
+            {% if classify_payloads.q06.fiscal_year %} Im Jahr {{
+            classify_payloads.q06.fiscal_year | int }} hatte diese Organisation
+            insgesamt Einnahmen über Fr.&nbsp;{{
+            classify_payloads.q06.total_earnings_chf | chf_thousands }}. {% if
+            classify_payloads.q06.donated_amount_chf %} Davon stammen
+            Fr.&nbsp;{{ classify_payloads.q06.donated_amount_chf | chf_thousands
+            }} aus Spenden. {% else %} Der Anteil von Spenden ist unbekannt. {%
+            endif %} {% else %} Es gibt keine zugänglichen Informationen zu den
+            Finanzen dieser Organisation. {% endif %}
+          </p>
+        </div>
       </div>
 
-      {% if classify_payloads %}
-        <div class="mt-6">
-          <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-600">Payload Keys</h2>
-          <ul class="mt-2 space-y-1 text-sm text-slate-700">
-            {% for key, payload in classify_payloads %}
-              <li>
-                <span class="font-medium">{{ key }}</span>
-                <span class="text-slate-500">(fields: {{ payload|length }})</span>
-              </li>
-            {% endfor %}
-          </ul>
+      <!-- Fixed manual review section for print annotations -->
+      <section
+        class="absolute left-20 right-20 bottom-20 pt-4 border-t border-slate-300"
+      >
+        <div class="flex items-baseline justify-between mb-2">
+          <h2
+            class="text-[13px] tracking-wide uppercase font-semibold text-slate-800 font-sans"
+          >
+            Manuelle Prüfung
+          </h2>
         </div>
-      {% else %}
-        <p class="mt-6 text-sm text-slate-500">No classify payloads available.</p>
-      {% endif %}
-    </section>
-  </div>
-</body>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div class="pr-2">
+            <p class="text-[11px] text-slate-700 font-sans mb-2">
+              Ausschlussgründe
+            </p>
+            <ul class="space-y-1.5 text-[11px] text-slate-800 font-sans">
+              <li class="flex items-start gap-2">
+                <span
+                  class="mt-[2px] w-[14px] h-[14px] border-[1.5px] border-slate-600 rounded-[3px] shrink-0"
+                ></span>
+                <span>Zu dogmatisch oder religiös geprägt</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span
+                  class="mt-[2px] w-[14px] h-[14px] border-[1.5px] border-slate-600 rounded-[3px] shrink-0"
+                ></span>
+                <span>Wirkt unseriös oder intransparent</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span
+                  class="mt-[2px] w-[14px] h-[14px] border-[1.5px] border-slate-600 rounded-[3px] shrink-0"
+                ></span>
+                <span>Tätigkeit wurde eingestellt</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span
+                  class="mt-[2px] w-[14px] h-[14px] border-[1.5px] border-slate-600 rounded-[3px] shrink-0"
+                ></span>
+                <span
+                  >Eine Spende von uns ist voraussichtlich nicht wirksam</span
+                >
+              </li>
+              <li class="flex items-start gap-2">
+                <span
+                  class="mt-[2px] w-[14px] h-[14px] border-[1.5px] border-slate-600 rounded-[3px] shrink-0"
+                ></span>
+                <span>Zu lokal tätig oder zu wenig Bezug zu Winterthur</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span
+                  class="mt-[2px] w-[14px] h-[14px] border-[1.5px] border-slate-600 rounded-[3px] shrink-0"
+                ></span>
+                <span>isch halt chli en Gugus</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span
+                  class="mt-[2px] w-[14px] h-[14px] border-[1.5px] border-slate-600 rounded-[3px] shrink-0"
+                ></span>
+                <span>Anderer Grund</span>
+              </li>
+            </ul>
+          </div>
+
+          <div>
+            <p class="text-[11px] text-slate-700 font-sans mb-2">Notizen</p>
+            <div
+              class="h-[126px] border border-slate-300 rounded-[10px] bg-white relative before:content-[''] before:absolute before:inset-0 before:rounded-[10px] before:bg-[repeating-linear-gradient(to_bottom,transparent,transparent_20px,#e2e8f0_20px,#e2e8f0_21px)] before:opacity-90 before:pointer-events-none"
+            ></div>
+          </div>
+        </div>
+      </section>
+
+      <footer
+        class="absolute left-20 right-20 bottom-8 flex items-center justify-between text-[10px] tracking-wide text-slate-500 font-sans"
+      >
+        <span
+          >Erstellt am {{ meta.generated_at_display or meta.generated_at
+          }}</span
+        >
+        <span
+          >Organisation {{ meta.org_number or 1 }} / {{ meta.total_orgs or 1
+          }}</span
+        >
+      </footer>
+    </div>
+  </body>
 </html>

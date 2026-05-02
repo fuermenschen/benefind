@@ -21,7 +21,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from PIL import Image, ImageDraw
 from playwright.sync_api import sync_playwright
 
-from benefind.classify import read_org_artifact
+from benefind.classify import load_classify_questions, read_org_artifact
 from benefind.config import PROJECT_ROOT
 
 
@@ -127,28 +127,34 @@ def _load_pdf_config() -> PdfConfig:
         map=MapConfig(
             style_url=str(map_cfg.get("style_url", "")).strip(),
             default_zoom=float(map_cfg.get("default_zoom", 12.8)),
-            base_zoom_for_coverage=float(map_cfg.get("base_zoom_for_coverage", 9.6)),
+            base_zoom_for_coverage=float(
+                map_cfg.get("base_zoom_for_coverage", 9.6)),
             width_px=int(map_cfg.get("width_px", 900)),
             height_px=int(map_cfg.get("height_px", 500)),
             max_render_dim_px=int(map_cfg.get("max_render_dim_px", 10000)),
-            max_render_pixels=int(map_cfg.get("max_render_pixels", 60_000_000)),
+            max_render_pixels=int(map_cfg.get(
+                "max_render_pixels", 60_000_000)),
             pad_lon=float(map_cfg.get("pad_lon", 0.03)),
             pad_lat=float(map_cfg.get("pad_lat", 0.02)),
             render_wait_ms=int(map_cfg.get("render_wait_ms", 350)),
             render_timeout_ms=int(map_cfg.get("render_timeout_ms", 20_000)),
             probe_vector_tile=bool(map_cfg.get("probe_vector_tile", True)),
-            projection_meta_version=int(map_cfg.get("projection_meta_version", 2)),
+            projection_meta_version=int(
+                map_cfg.get("projection_meta_version", 2)),
             marker_outer_radius_px=int(marker_cfg.get("outer_radius_px", 30)),
             marker_inner_radius_px=int(marker_cfg.get("inner_radius_px", 20)),
-            marker_outer_color=str(marker_cfg.get("outer_color", "#ea580c")).strip(),
-            marker_inner_color=str(marker_cfg.get("inner_color", "#9a3412")).strip(),
+            marker_outer_color=str(marker_cfg.get(
+                "outer_color", "#ea580c")).strip(),
+            marker_inner_color=str(marker_cfg.get(
+                "inner_color", "#9a3412")).strip(),
         ),
         fallbacks={str(k): str(v) for k, v in fallbacks.items()},
     )
 
 
 def _load_question_payload(org_id: str, question_id: str) -> dict[str, object]:
-    ask_path = PROJECT_ROOT / "data" / "orgs" / org_id / "classify" / question_id / "ask.json"
+    ask_path = PROJECT_ROOT / "data" / "orgs" / \
+        org_id / "classify" / question_id / "ask.json"
     payload = read_org_artifact(ask_path)
     manual = payload.get("manual_override", {})
     if isinstance(manual, dict):
@@ -159,6 +165,43 @@ def _load_question_payload(org_id: str, question_id: str) -> dict[str, object]:
     if isinstance(normalized, dict):
         return normalized
     return {}
+
+
+NON_PAYLOAD_CLASSIFY_KEYS = {
+    "evidence",
+    "reason",
+    "score",
+    "confidence",
+    "year_signal",
+    "candidate_years",
+}
+
+
+@lru_cache(maxsize=1)
+def _enabled_classify_question_ids() -> tuple[str, ...]:
+    questions = load_classify_questions()
+    enabled = [question.id for question in questions if question.enabled]
+    return tuple(enabled)
+
+
+def _load_classify_payloads(org_id: str) -> dict[str, dict[str, object]]:
+    payloads: dict[str, dict[str, object]] = {}
+    for question_id in _enabled_classify_question_ids():
+        payload = _load_question_payload(org_id, question_id)
+        filtered = {
+            key: value
+            for key, value in payload.items()
+            if key not in NON_PAYLOAD_CLASSIFY_KEYS
+        }
+        payloads[_short_question_key(question_id)] = filtered
+    return payloads
+
+
+def _short_question_key(question_id: str) -> str:
+    match = re.match(r"^(q\d+)", str(question_id or "").strip().lower())
+    if match:
+        return match.group(1)
+    return str(question_id or "").strip()
 
 
 def _load_municipality_registry() -> MunicipalityRegistry:
@@ -190,11 +233,13 @@ def _load_municipality_registry() -> MunicipalityRegistry:
             if not isinstance(row, dict):
                 continue
             alias = _normalize_location_name(str(row.get("alias", "") or ""))
-            mapped = _normalize_location_name(str(row.get("maps_to_key", "") or ""))
+            mapped = _normalize_location_name(
+                str(row.get("maps_to_key", "") or ""))
             if not alias or not mapped:
                 continue
             if mapped not in lonlat_by_key:
-                raise ValueError(f"Alias target not found in registry: {mapped}")
+                raise ValueError(
+                    f"Alias target not found in registry: {mapped}")
             key_by_alias[alias] = mapped
 
     if not lonlat_by_key:
@@ -228,7 +273,8 @@ def _deg2num(lon: float, lat: float, zoom: float) -> tuple[float, float]:
     lat_rad = math.radians(lat)
     n = 2.0**zoom
     xtile = (lon + 180.0) / 360.0 * n
-    ytile = (1.0 - math.log(math.tan(lat_rad) + (1.0 / math.cos(lat_rad))) / math.pi) / 2.0 * n
+    ytile = (1.0 - math.log(math.tan(lat_rad) +
+             (1.0 / math.cos(lat_rad))) / math.pi) / 2.0 * n
     return xtile, ytile
 
 
@@ -358,7 +404,8 @@ def _fetch_base_map_bytes(
         cfg.max_render_dim_px / float(cfg.width_px),
         cfg.max_render_dim_px / float(cfg.height_px),
     )
-    max_scale_px = math.sqrt(cfg.max_render_pixels / float(cfg.width_px * cfg.height_px))
+    max_scale_px = math.sqrt(cfg.max_render_pixels /
+                             float(cfg.width_px * cfg.height_px))
     render_scale = max(1.0, min(target_scale, max_scale_dim, max_scale_px))
     render_width = max(1, int(round(cfg.width_px * render_scale)))
     render_height = max(1, int(round(cfg.height_px * render_scale)))
@@ -401,9 +448,11 @@ def _fetch_base_map_bytes(
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
-            page = browser.new_page(viewport={"width": render_width, "height": render_height})
+            page = browser.new_page(
+                viewport={"width": render_width, "height": render_height})
             page.set_content(html_doc, wait_until="load")
-            page.wait_for_function("window.__renderDone === true", timeout=cfg.render_timeout_ms)
+            page.wait_for_function(
+                "window.__renderDone === true", timeout=cfg.render_timeout_ms)
             screenshot_bytes = page.screenshot(type="png")
             browser.close()
     except Exception:
@@ -417,7 +466,8 @@ def _fetch_base_map_bytes(
     except Exception:
         return None
 
-    boundary_rings = _fetch_district_boundary_rings_lonlat(timeout_seconds=timeout_seconds)
+    boundary_rings = _fetch_district_boundary_rings_lonlat(
+        timeout_seconds=timeout_seconds)
     composed = _apply_boundary_mask(
         composed,
         center_lon=center_lon,
@@ -431,8 +481,10 @@ def _fetch_base_map_bytes(
     if alpha_bbox:
         composed = composed.crop(alpha_bbox)
     crop_x0, crop_y0 = alpha_bbox[:2] if alpha_bbox else (0, 0)
-    crop_width = float(alpha_bbox[2] - alpha_bbox[0]) if alpha_bbox else float(full_width)
-    crop_height = float(alpha_bbox[3] - alpha_bbox[1]) if alpha_bbox else float(full_height)
+    crop_width = float(alpha_bbox[2] - alpha_bbox[0]
+                       ) if alpha_bbox else float(full_width)
+    crop_height = float(alpha_bbox[3] - alpha_bbox[1]
+                        ) if alpha_bbox else float(full_height)
 
     uniform_scale = (
         min(cfg.width_px / crop_width, cfg.height_px / crop_height)
@@ -442,7 +494,8 @@ def _fetch_base_map_bytes(
     resized_w = max(1, int(round(crop_width * uniform_scale)))
     resized_h = max(1, int(round(crop_height * uniform_scale)))
     if composed.size != (resized_w, resized_h):
-        composed = composed.resize((resized_w, resized_h), resample=Image.Resampling.LANCZOS)
+        composed = composed.resize(
+            (resized_w, resized_h), resample=Image.Resampling.LANCZOS)
 
     canvas_img = Image.new("RGBA", (cfg.width_px, cfg.height_px), (0, 0, 0, 0))
     pad_x = (cfg.width_px - resized_w) // 2
@@ -485,10 +538,54 @@ def _is_usable_map_image(image_bytes: bytes) -> bool:
             values = list(rgb.getdata())
             if not values:
                 return False
-            near_white = sum(1 for r, g, b in values if r >= 245 and g >= 245 and b >= 245)
+            near_white = sum(1 for r, g, b in values if r >=
+                             245 and g >= 245 and b >= 245)
             return near_white / len(values) <= 0.995
     except Exception:
         return False
+
+
+def _crop_map_output_image(image_bytes: bytes, *, white_threshold: int = 245) -> bytes | None:
+    try:
+        with Image.open(BytesIO(image_bytes)) as src:
+            rgba = src.convert("RGBA")
+            width, height = rgba.size
+            px = rgba.load()
+            if px is None or width <= 0 or height <= 0:
+                return None
+
+            def _has_visible_content(x: int, y: int) -> bool:
+                r, g, b, a = px[x, y]
+                return a > 0 and (r < white_threshold or g < white_threshold or b < white_threshold)
+
+            left = 0
+            while left < width and not any(_has_visible_content(left, y) for y in range(height)):
+                left += 1
+
+            if left == width:
+                return image_bytes
+
+            right = width - 1
+            while right >= 0 and not any(_has_visible_content(right, y) for y in range(height)):
+                right -= 1
+
+            top = 0
+            while top < height and not any(_has_visible_content(x, top) for x in range(width)):
+                top += 1
+
+            bottom = height - 1
+            while bottom >= 0 and not any(_has_visible_content(x, bottom) for x in range(width)):
+                bottom -= 1
+
+            if left == 0 and top == 0 and right == width - 1 and bottom == height - 1:
+                return image_bytes
+
+            cropped = rgba.crop((left, top, right + 1, bottom + 1))
+            buffer = BytesIO()
+            cropped.save(buffer, format="PNG")
+            return buffer.getvalue()
+    except Exception:
+        return None
 
 
 def _render_marker_map(
@@ -519,8 +616,10 @@ def _render_marker_map(
             lon, lat = lonlat
             xtf, ytf = _deg2num(float(lon), float(lat), zoom)
             cx_tf, cy_tf = _deg2num(center_lon, center_lat, zoom)
-            full_x = (xtf - cx_tf) * 256.0 + (float(meta.get("full_width", width)) / 2.0)
-            full_y = (ytf - cy_tf) * 256.0 + (float(meta.get("full_height", height)) / 2.0)
+            full_x = (xtf - cx_tf) * 256.0 + \
+                (float(meta.get("full_width", width)) / 2.0)
+            full_y = (ytf - cy_tf) * 256.0 + \
+                (float(meta.get("full_height", height)) / 2.0)
             x = int(round((full_x - crop_x0) * scale_x + pad_x))
             y = int(round((full_y - crop_y0) * scale_y + pad_y))
             x = max(0, min(width - 1, x))
@@ -549,7 +648,9 @@ def _render_marker_map(
 
             buffer = BytesIO()
             img.save(buffer, format="PNG")
-            return buffer.getvalue()
+            rendered = buffer.getvalue()
+            cropped = _crop_map_output_image(rendered)
+            return cropped if cropped else rendered
     except Exception:
         return None
 
@@ -603,7 +704,8 @@ def _base_map_cache_fingerprint(cfg: MapConfig) -> str:
         "boundary_feature_id": int(_cfg_get("map.boundary.feature_id", 110)),
         "boundary_sr": int(_cfg_get("map.boundary.sr", 4326)),
     }
-    raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    raw = json.dumps(payload, ensure_ascii=True,
+                     sort_keys=True, separators=(",", ":"))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
@@ -614,7 +716,8 @@ def _marker_cache_fingerprint(cfg: MapConfig) -> str:
         "outer_color": cfg.marker_outer_color.strip().lower(),
         "inner_color": cfg.marker_inner_color.strip().lower(),
     }
-    raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    raw = json.dumps(payload, ensure_ascii=True,
+                     sort_keys=True, separators=(",", ":"))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
 
 
@@ -623,12 +726,33 @@ def _img_data_uri(image_bytes: bytes) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
+def _format_chf_thousands(value: object) -> str:
+    try:
+        if value is None or pd.isna(value):
+            return "-"
+        amount = int(float(str(value)))
+    except (TypeError, ValueError):
+        return "-"
+    return f"{amount:,}".replace(",", "'")
+
+
+def _format_generated_at_display(generated_at: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    except ValueError:
+        return generated_at
+    return parsed.strftime("%d.%m.%Y %H:%M")
+
+
 @lru_cache(maxsize=1)
 def _template_environment() -> Environment:
-    return Environment(
+    env = Environment(
         loader=FileSystemLoader(str(PROJECT_ROOT)),
-        autoescape=select_autoescape(enabled_extensions=("html", "xml"), default=True),
+        autoescape=select_autoescape(
+            enabled_extensions=("html", "xml"), default=True),
     )
+    env.filters["chf_thousands"] = _format_chf_thousands
+    return env
 
 
 def _build_packet_html(
@@ -637,18 +761,26 @@ def _build_packet_html(
     org_id: str,
     org_name: str,
     location: str,
+    website_url: str,
+    description: str,
     map_data_uri: str | None,
     map_status: str,
     generated_at: str,
+    org_number: int,
+    total_orgs: int,
     payloads: dict[str, dict[str, object]],
 ) -> str:
     context = _build_packet_context(
         org_id=org_id,
         org_name=org_name,
         location=location,
+        website_url=website_url,
+        description=description,
         map_data_uri=map_data_uri,
         map_status=map_status,
         generated_at=generated_at,
+        org_number=org_number,
+        total_orgs=total_orgs,
         payloads=payloads,
     )
     rel = str(_cfg_get("template.html_file", "config/review_pdf_template.html"))
@@ -660,9 +792,13 @@ def _build_packet_context(
     org_id: str,
     org_name: str,
     location: str,
+    website_url: str,
+    description: str,
     map_data_uri: str | None,
     map_status: str,
     generated_at: str,
+    org_number: int,
+    total_orgs: int,
     payloads: dict[str, dict[str, object]],
 ) -> dict[str, object]:
     return {
@@ -670,6 +806,8 @@ def _build_packet_context(
             "id": org_id,
             "name": org_name,
             "location": location or "-",
+            "website_url": website_url,
+            "description": description,
         },
         "map": {
             "status": map_status,
@@ -679,6 +817,9 @@ def _build_packet_context(
         "classify_payloads": payloads,
         "meta": {
             "generated_at": generated_at,
+            "generated_at_display": _format_generated_at_display(generated_at),
+            "org_number": org_number,
+            "total_orgs": total_orgs,
         },
     }
 
@@ -694,6 +835,7 @@ def _render_html_to_pdf(html_doc: str, output_path: Path) -> None:
             path=str(output_path),
             format="A4",
             print_background=True,
+            prefer_css_page_size=True,
             margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
         )
         browser.close()
@@ -713,7 +855,8 @@ def export_review_pdfs(
 
     base = df.copy()
     if "_excluded_reason" in base.columns:
-        base = base.loc[base["_excluded_reason"].astype(str).str.strip() == ""].copy()
+        base = base.loc[base["_excluded_reason"].astype(
+            str).str.strip() == ""].copy()
     if org_id_filter:
         target = org_id_filter.strip()
         base = base[base["_org_id"].astype(str).str.strip() == target]
@@ -726,14 +869,17 @@ def export_review_pdfs(
 
     map_cache_dir.mkdir(parents=True, exist_ok=True)
     base_fp = _base_map_cache_fingerprint(cfg.map)
-    base_map_cache = map_cache_dir / f"_base_map_winterthur_masked_{base_fp}.png"
-    base_map_meta_cache = map_cache_dir / f"_base_map_winterthur_masked_{base_fp}.meta.json"
+    base_map_cache = map_cache_dir / \
+        f"_base_map_winterthur_masked_{base_fp}.png"
+    base_map_meta_cache = map_cache_dir / \
+        f"_base_map_winterthur_masked_{base_fp}.meta.json"
     base_map_bytes: bytes | None = None
     if base_map_cache.exists():
         cached = base_map_cache.read_bytes()
         if _is_usable_map_image(cached):
             base_map_bytes = cached
-            cached_meta = _load_map_meta(base_map_meta_cache, cfg.map.projection_meta_version)
+            cached_meta = _load_map_meta(
+                base_map_meta_cache, cfg.map.projection_meta_version)
             if cached_meta:
                 registry.map_meta = cached_meta
     if base_map_bytes is None:
@@ -751,7 +897,8 @@ def export_review_pdfs(
     elif isinstance(registry.map_meta, dict):
         _save_map_meta(base_map_meta_cache, registry.map_meta)
 
-    for _, row in base.iterrows():
+    total_orgs = int(len(base))
+    for org_number, (_, row) in enumerate(base.iterrows(), start=1):
         org_id = _clean_text(row.get("_org_id", ""))
         if not org_id:
             stats.failed += 1
@@ -770,12 +917,12 @@ def export_review_pdfs(
             cfg.fallbacks.get("org_title", "Unbekannte Organisation"),
         )
         location = _clean_text(row.get("Sitzort", row.get("Sitz", "")))
+        website_url = _clean_text(
+            row.get("_website_url_final", row.get("_website_url", "")))
 
-        payloads = {
-            "q04_primary_target_group": _load_question_payload(org_id, "q04_primary_target_group"),
-            "q05_founded_year": _load_question_payload(org_id, "q05_founded_year"),
-            "q06_financials_manual": _load_question_payload(org_id, "q06_financials_manual"),
-        }
+        payloads = _load_classify_payloads(org_id)
+        description = str(payloads.get("q07", {}).get(
+            "summary_de", "") or "").strip()
 
         map_status = "ok"
         map_bytes: bytes | None = None
@@ -798,7 +945,8 @@ def export_review_pdfs(
             else:
                 marker = registry.lonlat_by_key.get(muni_key)
                 if marker:
-                    rendered = _render_marker_map(base_map_bytes, registry, marker, cfg)
+                    rendered = _render_marker_map(
+                        base_map_bytes, registry, marker, cfg)
                     if rendered and _is_usable_map_image(rendered):
                         map_bytes = rendered
                         cache_path.write_bytes(rendered)
@@ -808,6 +956,9 @@ def export_review_pdfs(
                     map_status = "municipality_missing_point"
 
         if map_bytes:
+            cropped = _crop_map_output_image(map_bytes)
+            if cropped:
+                map_bytes = cropped
             stats.map_ok += 1
         else:
             stats.map_missing += 1
@@ -819,9 +970,13 @@ def export_review_pdfs(
                 org_id=org_id,
                 org_name=org_name,
                 location=location,
+                website_url=website_url,
+                description=description,
                 map_data_uri=_img_data_uri(map_bytes) if map_bytes else None,
                 map_status=map_status,
                 generated_at=generated_at,
+                org_number=org_number,
+                total_orgs=total_orgs,
                 payloads=payloads,
             )
             _render_html_to_pdf(html_doc, output_path)
@@ -862,7 +1017,8 @@ def build_review_pdf_preview_context(
     registry = _load_municipality_registry()
     base = df.copy()
     if "_excluded_reason" in base.columns:
-        base = base.loc[base["_excluded_reason"].astype(str).str.strip() == ""].copy()
+        base = base.loc[base["_excluded_reason"].astype(
+            str).str.strip() == ""].copy()
     if org_id_filter:
         target = org_id_filter.strip()
         base = base[base["_org_id"].astype(str).str.strip() == target]
@@ -878,17 +1034,22 @@ def build_review_pdf_preview_context(
         cfg.fallbacks.get("org_title", "Unbekannte Organisation"),
     )
     location = _clean_text(row.get("Sitzort", row.get("Sitz", "")))
+    website_url = _clean_text(
+        row.get("_website_url_final", row.get("_website_url", "")))
 
     map_cache_dir.mkdir(parents=True, exist_ok=True)
     base_fp = _base_map_cache_fingerprint(cfg.map)
-    base_map_cache = map_cache_dir / f"_base_map_winterthur_masked_{base_fp}.png"
-    base_map_meta_cache = map_cache_dir / f"_base_map_winterthur_masked_{base_fp}.meta.json"
+    base_map_cache = map_cache_dir / \
+        f"_base_map_winterthur_masked_{base_fp}.png"
+    base_map_meta_cache = map_cache_dir / \
+        f"_base_map_winterthur_masked_{base_fp}.meta.json"
     base_map_bytes: bytes | None = None
     if base_map_cache.exists():
         cached = base_map_cache.read_bytes()
         if _is_usable_map_image(cached):
             base_map_bytes = cached
-            cached_meta = _load_map_meta(base_map_meta_cache, cfg.map.projection_meta_version)
+            cached_meta = _load_map_meta(
+                base_map_meta_cache, cfg.map.projection_meta_version)
             if cached_meta:
                 registry.map_meta = cached_meta
     if base_map_bytes is None or not isinstance(registry.map_meta, dict):
@@ -909,7 +1070,8 @@ def build_review_pdf_preview_context(
     else:
         marker = registry.lonlat_by_key.get(muni_key)
         if marker:
-            rendered = _render_marker_map(base_map_bytes, registry, marker, cfg)
+            rendered = _render_marker_map(
+                base_map_bytes, registry, marker, cfg)
             if rendered and _is_usable_map_image(rendered):
                 map_bytes = rendered
             else:
@@ -917,18 +1079,25 @@ def build_review_pdf_preview_context(
         else:
             map_status = "municipality_missing_point"
 
-    payloads = {
-        "q04_primary_target_group": _load_question_payload(org_id, "q04_primary_target_group"),
-        "q05_founded_year": _load_question_payload(org_id, "q05_founded_year"),
-        "q06_financials_manual": _load_question_payload(org_id, "q06_financials_manual"),
-    }
+    if map_bytes:
+        cropped = _crop_map_output_image(map_bytes)
+        if cropped:
+            map_bytes = cropped
+
+    payloads = _load_classify_payloads(org_id)
+    description = str(payloads.get("q07", {}).get(
+        "summary_de", "") or "").strip()
     generated_at = datetime.now(UTC).isoformat(timespec="seconds")
     return _build_packet_context(
         org_id=org_id,
         org_name=org_name,
         location=location,
+        website_url=website_url,
+        description=description,
         map_data_uri=_img_data_uri(map_bytes) if map_bytes else None,
         map_status=map_status,
         generated_at=generated_at,
+        org_number=1,
+        total_orgs=1,
         payloads=payloads,
     )
