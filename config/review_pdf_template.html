@@ -5,17 +5,46 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       @page {
         size: A4;
         margin: 0;
       }
+
+      .notes-paper {
+        background-image: repeating-linear-gradient(
+          to bottom,
+          transparent,
+          transparent 20px,
+          #e2e8f0 20px,
+          #e2e8f0 21px
+        );
+        background-size: 100% 21px;
+      }
+
+      @media print {
+        html,
+        body {
+          width: 210mm;
+          height: 297mm;
+          margin: 0;
+          padding: 0;
+          overflow: hidden;
+          background: #fff;
+        }
+      }
     </style>
   </head>
   <body
-    class="m-0 p-0 print:w-[210mm] print:h-[297mm] print:bg-white min-h-screen bg-slate-300 p-6 flex justify-center items-start"
+    class="m-0 p-0 print:w-[210mm] print:h-[297mm] print:bg-white print:p-0 print:min-h-0 min-h-screen bg-slate-300 p-6 flex justify-center items-start"
   >
     <div
-      class="w-[210mm] h-[297mm] overflow-hidden bg-white p-20 text-slate-900 font-serif relative shadow-2xl shadow-slate-900/35 border border-slate-400 print:shadow-none print:border-none"
+      class="w-[210mm] h-[297mm] overflow-hidden bg-white p-20 text-slate-900 font-serif relative shadow-2xl shadow-slate-900/35 border border-slate-400 print:shadow-none print:border-none print:p-[18mm]"
     >
       <div class="h-full pb-56">
         <!-- Top section with reserved map space -->
@@ -196,7 +225,7 @@
           <div>
             <p class="text-[11px] text-slate-700 font-sans mb-2">Notizen</p>
             <div
-              class="h-[126px] border border-slate-300 rounded-[10px] bg-white relative before:content-[''] before:absolute before:inset-0 before:rounded-[10px] before:bg-[repeating-linear-gradient(to_bottom,transparent,transparent_20px,#e2e8f0_20px,#e2e8f0_21px)] before:opacity-90 before:pointer-events-none"
+              class="notes-paper h-[126px] border border-slate-300 rounded-[10px] bg-white"
             ></div>
           </div>
         </div>
