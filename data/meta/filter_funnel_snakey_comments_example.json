@@ -1,0 +1,11 @@
+{
+  "step_context": {
+    "category_a": "Organizations that only partially engage in charitable activity — meaning they pursue a mix of commercial or non-charitable purposes alongside their charitable work — were excluded from further review.",
+    "location_winterthur": "Only organizations located within the Bezirk Winterthur administrative district were carried forward. Organizations registered elsewhere, even if operating in the region, were excluded.",
+    "website_review_exclusion": "Organizations without a publicly accessible website were excluded, as a website is required for the subsequent automated classification steps. During this manual review pass, organizations that were clearly outside the target criteria (e.g. purely environmental or sports clubs) were also excluded directly.",
+    "q01_target_focus": "Organizations whose primary focus is nature conservation, animal welfare, education, politics, or other non-human-welfare causes were excluded. Only organizations whose core mission is the direct benefit of people were carried forward.",
+    "q02_regional_focus": "Organizations that operate nationally or internationally were excluded. A national organization with a clearly documented strong regional presence in the Winterthur area was not excluded.",
+    "q03_donation_ask": "Organizations without a visible donation call-to-action on their website were excluded. The presence of a bank account (IBAN) was treated as sufficient evidence of a donation ask. Organizations that explicitly describe themselves as grant-making foundations funded entirely from endowment assets were excluded.",
+    "sanity_check": "A final manual sweep over all remaining organizations identified a small number of edge cases that slipped through the automated filters. These were excluded on a case-by-case basis with individually documented reasons."
+  }
+}

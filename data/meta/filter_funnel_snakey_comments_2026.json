@@ -1,0 +1,12 @@
+{
+  "step_context": {
+    "category_a": "Organisationen, die nur teilweise einer gemeinnützigen Tätigkeit nachgehen.",
+    "location_winterthur": "Nur Organisationen im Bezirk Winterthur wurden weiter betrachtet.",
+    "website_review_exclusion": "Organisationen ohne Webseite wurden ausgeschlossen. Im Zuge dessen wurden auch direkt Organisationen ausgeschlossen, die offensichtlich nicht unseren Anforderungen entsprechen (z.B. der \"Natur- und Vogelschutzverein Winterthur-Seen\").",
+    "q01_target_focus": "Organisationen, bei welchen der Naturschutz, Tierschutz, die Bildung, Politik, etc., also nicht Menschen im Fokus steht, wurden ausgeschlossen.",
+    "q02_regional_focus": "Organisationen, die national oder international tätig sind, wurden ausgeschlossen. National tätige Organisationen mit starkem regionalen Fokus wurden nicht ausgeschlossen.",
+    "q03_donation_ask": "Organisationen, die keinen sichtbaren Spendenaufruf haben, wurden ausgeschlossen. Ein Vorhandensein einer IBAN wurde als Spendenaufruf verstanden. Organisationen, die sich aber beispielsweise als Förderstiftung bezeichnen und beschreiben, wie ihre Tätigkeit nur aus dem Stiftungsvermögen finanziert wird, wurden ausgeschlossen.",
+    "sanity_check": "Manuell aussoerierte Organisationen, die bei einer kompletten Durchsicht der verbleibenden Organisationen als nicht passend erschienen, wurden ausgeschlossen.",
+    "manual_relevance_review": "Die verbleibenden Organisationen wurden manuell geprüft. Dabei wurden zum beispiel Organisationen aussortiert, die so viel Einkünfte haben, dass eine Spende von uns keinen relevanten Unterschied macht. Auch solche, die zu eng mit dogmatischen oder religiösen Ansichten verbunden sind, wurden ausgeschlossen. Zudem wurden Organisationen ausgeschlossen, bei welchen eine Kontaktaufnahme gezeigt hat, dass die Tätigkeit eingestellt wurde."
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "generated_at": "2026-05-03T08:07:53+00:00",
+  "inputs": {
+    "parsed_all": "data/parsed/organizations_all.csv",
+    "matched": "data/filtered/organizations_matched.csv",
+    "excluded": "data/filtered/organizations_excluded.csv",
+    "with_websites": "data/filtered/organizations_with_websites.csv",
+    "conclusions": "data/classify/conclusions.json"
+  },
+  "totals": {
+    "parsed_all": 6478,
+    "after_category_a": 6309,
+    "after_location_winterthur": 575,
+    "downstream_cohort": 575,
+    "not_yet_propagated_to_downstream": 0,
+    "final_active": 52
+  },
+  "steps": [
+    {
+      "id": "category_a",
+      "excluded": 169,
+      "remaining": 6309,
+      "reason_breakdown": {
+        "NOT_CATEGORY_A": 169
+      }
+    },
+    {
+      "id": "location_winterthur",
+      "excluded": 5734,
+      "remaining": 575,
+      "reason_breakdown": {
+        "OUTSIDE_BEZIRK_WINTERTHUR": 5734
+      }
+    },
+    {
+      "id": "website_review_exclusion",
+      "excluded": 206,
+      "reason_breakdown": {
+        "IRRELEVANT_PURPOSE": 106,
+        "NO_INFORMATION": 79,
+        "NOT_EXIST": 13,
+        "IN_LIQUIDATION": 4,
+        "OTHER": 4
+      }
+    },
+    {
+      "id": "q01_target_focus",
+      "excluded": 229,
+      "reason_breakdown": {
+        "IRRELEVANT_PURPOSE": 229
+      }
+    },
+    {
+      "id": "q02_regional_focus",
+      "excluded": 50,
+      "reason_breakdown": {
+        "IRRELEVANT_PURPOSE": 50
+      }
+    },
+    {
+      "id": "q03_donation_ask",
+      "excluded": 23,
+      "reason_breakdown": {
+        "IRRELEVANT_PURPOSE": 21,
+        "NO_INFORMATION": 2
+      }
+    },
+    {
+      "id": "q04_primary_target_group",
+      "excluded": 6,
+      "reason_breakdown": {
+        "IRRELEVANT_PURPOSE": 5,
+        "NOT_EXIST": 1
+      }
+    },
+    {
+      "id": "q05_founded_year",
+      "excluded": 2,
+      "reason_breakdown": {
+        "IRRELEVANT_PURPOSE": 1,
+        "NOT_EXIST": 1
+      }
+    },
+    {
+      "id": "manual_cleanup_or_unattributed",
+      "excluded": 7,
+      "reason_breakdown": {
+        "IRRELEVANT_PURPOSE": 6,
+        "OTHER": 1
+      }
+    }
+  ],
+  "breakdowns": {
+    "excluded_reason_overall": {
+      "IRRELEVANT_PURPOSE": 418,
+      "NO_INFORMATION": 81,
+      "NOT_EXIST": 15,
+      "OTHER": 5,
+      "IN_LIQUIDATION": 4
+    }
+  },
+  "consistency": {
+    "excluded_rows_total": 523,
+    "excluded_rows_accounted_by_steps": 523,
+    "excluded_rows_match": true,
+    "final_active_plus_excluded_equals_downstream": true
+  }
+}
