@@ -92,7 +92,7 @@ branch_offset_secondary = 250.0
 # ---------------------------------------------------------------------------
 
 # Gap (px) between consecutive trunk nodes along the flow axis.
-trunk_gap_primary = 130.0
+trunk_gap_primary = 200.0
 
 # Spacing (px) between exclusion nodes along the flow axis (spreads them apart
 # when multiple steps share the same trunk segment).
@@ -206,7 +206,7 @@ paper_orientation = "portrait"
 # page_height_px = 1160
 
 # Inner page padding (px).
-page_padding_px = 24
+page_padding_px = 50
 
 
 # ===========================================================================
@@ -231,11 +231,11 @@ page_padding_px = 24
 
 
 # Font sizes (px).
-# title_size        = 36   # diagram title
-# subtitle_size     = 20   # diagram subtitle
-# block_title_size  = 18   # node label first line
-# block_count_size  = 16   # node label count line
-# block_context_size = 14  # node label context/explanation line
+title_size        = 24   # diagram title
+subtitle_size     = 18   # diagram subtitle
+block_title_size  = 22  # node label first line
+block_count_size  = 20   # node label count line
+block_context_size = 18  # node label context/explanation line
 
 # Gap (px) between the title and subtitle text blocks.
 # title_subtitle_gap = 12
