@@ -21,6 +21,9 @@ uv run benefind review discover-mismatches
 uv run benefind classify
 ```
 
+After the pipeline is complete, render the filter-funnel diagram — see
+`docs/visualization.md`.
+
 ## Individual steps
 
 ```bash
