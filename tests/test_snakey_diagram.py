@@ -14,6 +14,7 @@ from benefind.diagram.snakey import (
     TextBlock,
     TrunkNode,
     layout_snakey,
+    render_html,
     render_svg,
 )
 from benefind.diagram.snakey.types import BoundingBox
@@ -258,7 +259,12 @@ def test_config_and_comments_merge_into_model(tmp_path: Path) -> None:
     assert layout_cfg.text_max_width_exclusion_node == 420
     assert style_cfg.block_context_size == 15
 
-    meta_path = Path(__file__).resolve().parents[1] / "data" / "meta" / "filter_funnel_meta_2026.json"
+    meta_path = (
+        Path(__file__).resolve().parents[1]
+        / "data"
+        / "meta"
+        / "filter_funnel_meta_2026.json"
+    )
     with meta_path.open("r", encoding="utf-8") as f:
         meta = json.load(f)
 
@@ -277,6 +283,27 @@ def test_svg_embeds_font_face_by_default(tmp_path: Path) -> None:
     svg = out.read_text(encoding="utf-8")
     assert "@font-face" in svg
     assert "data:font/ttf;base64," in svg
+
+
+def test_svg_is_content_only_without_background_rect(tmp_path: Path) -> None:
+    model = _make_model()
+    scene = layout_snakey(model, LayoutConfig(), SnakeyStyle())
+    out = tmp_path / "snakey.svg"
+    render_svg(scene, out)
+    svg = out.read_text(encoding="utf-8")
+    assert "linearGradient" not in svg
+    assert "fill=\"url(#bg)\"" not in svg
+
+
+def test_html_owns_page_background_and_width(tmp_path: Path) -> None:
+    model = _make_model()
+    style = SnakeyStyle(background_start="#112233", background_end="#334455")
+    scene = layout_snakey(model, LayoutConfig(), style)
+    out = tmp_path / "snakey.html"
+    render_html(scene, out, page_width=1777)
+    html_doc = out.read_text(encoding="utf-8")
+    assert "--page-width: 1777px;" in html_doc
+    assert "linear-gradient(135deg, #112233, #334455)" in html_doc
 
 
 def test_parse_args_accepts_pdf_and_all(monkeypatch) -> None:

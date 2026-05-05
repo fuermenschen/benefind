@@ -35,17 +35,33 @@ def _make_model() -> SnakeyModel:
         title="Funnel",
         subtitle="Engine knob coverage",
         trunk_nodes=[
-            TrunkNode("t0", TextBlock(title="Start Stage", count="1'000 organisations"), 1000, highlight=True),
+            TrunkNode(
+                "t0",
+                TextBlock(title="Start Stage", count="1'000 organisations"),
+                1000,
+                highlight=True,
+            ),
             TrunkNode("t1", TextBlock(title="Parse Scope", count="850 organisations"), 850),
             TrunkNode("t2", TextBlock(title="Policy Fit", count="640 organisations"), 640),
-            TrunkNode("t3", TextBlock(title="Website Discovery", count="390 organisations"), 390),
-            TrunkNode("t4", TextBlock(title="Final Review", count="220 organisations"), 220, highlight=True),
+            TrunkNode(
+                "t3", TextBlock(title="Website Discovery", count="390 organisations"), 390
+            ),
+            TrunkNode(
+                "t4",
+                TextBlock(title="Final Review", count="220 organisations"),
+                220,
+                highlight=True,
+            ),
         ],
         stage_labels=[
-            StageLabel("s1", TextBlock(title="Stage 1", count="850 remain"), "t0", "t1", highlight=True),
+            StageLabel(
+                "s1", TextBlock(title="Stage 1", count="850 remain"), "t0", "t1", highlight=True
+            ),
             StageLabel("s2", TextBlock(title="Stage 2", count="640 remain"), "t1", "t2"),
             StageLabel("s3", TextBlock(title="Stage 3", count="390 remain"), "t2", "t3"),
-            StageLabel("s4", TextBlock(title="Stage 4", count="220 remain"), "t3", "t4", highlight=True),
+            StageLabel(
+                "s4", TextBlock(title="Stage 4", count="220 remain"), "t3", "t4", highlight=True
+            ),
         ],
         exclusion_nodes=[
             ExclusionNode(
@@ -218,10 +234,10 @@ def _build_cases() -> list[KnobCase]:
         KnobCase("style", "font_family", "Georgia, serif", "svg"),
         KnobCase("style", "embedded_font_family", "Georgia", "svg"),
         KnobCase("style", "embedded_font_files", (), "svg"),
-        KnobCase("style", "background_start", "#111827", "svg"),
-        KnobCase("style", "background_end", "#1f2937", "svg"),
-        KnobCase("style", "title_color", "#ef4444", "svg"),
-        KnobCase("style", "subtitle_color", "#22c55e", "svg"),
+        KnobCase("style", "background_start", "#111827", "none"),
+        KnobCase("style", "background_end", "#1f2937", "none"),
+        KnobCase("style", "title_color", "#ef4444", "none"),
+        KnobCase("style", "subtitle_color", "#22c55e", "none"),
         KnobCase("style", "main_trunk_color", "#06b6d4", "svg"),
         KnobCase("style", "main_trunk_opacity", 0.55, "svg"),
         KnobCase("style", "exclusion_branch_color", "#e11d48", "svg"),
@@ -231,10 +247,10 @@ def _build_cases() -> list[KnobCase]:
         KnobCase("style", "text_color", "#334155", "svg"),
         KnobCase("style", "text_subtle_color", "#0ea5e9", "svg"),
         KnobCase("style", "context_color", "#f43f5e", "svg"),
-        KnobCase("style", "title_size", 44, "svg"),
-        KnobCase("style", "subtitle_size", 24, "svg"),
-        KnobCase("style", "title_subtitle_gap", 24, "scene"),
-        KnobCase("style", "title_block_margin", 48, "scene"),
+        KnobCase("style", "title_size", 44, "none"),
+        KnobCase("style", "subtitle_size", 24, "none"),
+        KnobCase("style", "title_subtitle_gap", 24, "none"),
+        KnobCase("style", "title_block_margin", 48, "none"),
         KnobCase("style", "block_title_size", 22, "scene"),
         KnobCase("style", "block_count_size", 20, "scene"),
         KnobCase("style", "block_context_size", 18, "scene"),
@@ -246,9 +262,27 @@ def _build_cases() -> list[KnobCase]:
         KnobCase("style", "branch_stroke_min", 6.0, "scene"),
         KnobCase("style", "branch_stroke_max", 52.0, "scene"),
         KnobCase("style", "stroke_scale_exponent", 0.45, "scene"),
-        KnobCase("style", "highlight_node_fill", "#f59e0b", "svg", active_overrides={"highlight_mode": "fill"}),
-        KnobCase("style", "highlight_node_ring_color", "#000000", "svg", active_overrides={"highlight_mode": "ring"}),
-        KnobCase("style", "highlight_node_ring_width", 6.0, "svg", active_overrides={"highlight_mode": "ring"}),
+        KnobCase(
+            "style",
+            "highlight_node_fill",
+            "#f59e0b",
+            "svg",
+            active_overrides={"highlight_mode": "fill"},
+        ),
+        KnobCase(
+            "style",
+            "highlight_node_ring_color",
+            "#000000",
+            "svg",
+            active_overrides={"highlight_mode": "ring"},
+        ),
+        KnobCase(
+            "style",
+            "highlight_node_ring_width",
+            6.0,
+            "svg",
+            active_overrides={"highlight_mode": "ring"},
+        ),
         KnobCase(
             "style",
             "highlight_badge_svg",

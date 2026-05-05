@@ -18,7 +18,7 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from .text import resolve_text_block, stroke_width_for, wrap_diagram_title
+from .text import resolve_text_block, stroke_width_for
 from .types import (
     BoundingBox,
     EdgeRoute,
@@ -221,7 +221,7 @@ def _fit_canvas(
     ]
 
     # Recompute bounds after shift
-    _, _, new_max_x, new_max_y = _scene_bounds(shifted_nodes, shifted_texts, edge_routes)
+    _, _, new_max_x, new_max_y = _scene_bounds(shifted_nodes, shifted_texts, shifted_edges)
 
     w = int(math.ceil(new_max_x + pad))
     h = int(math.ceil(new_max_y + pad))
@@ -586,24 +586,14 @@ def layout_snakey(model: SnakeyModel, config: LayoutConfig, style: SnakeyStyle) 
     # ------------------------------------------------------------------
     # 8. Canvas fit
     # ------------------------------------------------------------------
-    # Estimate canvas width from content bounds so we can wrap the title.
-    # We use the raw (pre-fit) bounds here; the fit step will re-apply padding.
-    raw_min_x, _raw_min_y, raw_max_x, _raw_max_y = _scene_bounds(
-        all_node_anchors, resolved_texts, final_edge_routes
-    )
-    pad = float(config.canvas_fit_padding)
-    estimated_canvas_width = (raw_max_x - raw_min_x) + 2 * pad
-    title_max_width = max(estimated_canvas_width - 2 * pad, 200.0)
-
-    wrapped = wrap_diagram_title(model.title, model.subtitle, title_max_width, style)
-    computed_title_block_height = wrapped.block_height + style.title_block_margin
-
+    # Title and subtitle are rendered in the HTML wrapper, not in the SVG.
+    # No vertical space needs to be reserved at the top of the canvas.
     fitted_nodes, fitted_texts, fitted_edges, w, h = _fit_canvas(
         all_node_anchors,
         resolved_texts,
         final_edge_routes,
         config,
-        title_block_height=computed_title_block_height,
+        title_block_height=0.0,
     )
 
     return Scene(

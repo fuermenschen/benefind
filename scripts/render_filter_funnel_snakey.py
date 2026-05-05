@@ -15,7 +15,13 @@ from dataclasses import fields, replace
 from pathlib import Path
 
 from benefind.diagram.filter_funnel import build_model
-from benefind.diagram.snakey import LayoutConfig, SnakeyStyle, layout_snakey, render_svg
+from benefind.diagram.snakey import (
+    LayoutConfig,
+    SnakeyStyle,
+    layout_snakey,
+    render_html,
+    render_svg,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT = REPO_ROOT / "data" / "meta" / "filter_funnel_meta.json"
@@ -111,38 +117,36 @@ def _load_step_context(path: Path | None) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# PNG export
+# PNG / PDF export via Playwright
 # ---------------------------------------------------------------------------
+# Both functions load the generated .html file (which references the .svg by
+# filename) so that the title/subtitle are rendered by the browser.
 
 
 def _export_png_with_playwright(
+    html_path: Path,
     svg_path: Path,
     png_path: Path,
-    width: int,
-    height: int,
+    page_width: int,
+    page_height: int,
     scale: int,
 ) -> None:
-    html = (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<style>body{margin:0;background:#eaeef3;display:flex;justify-content:center;"
-        "align-items:flex-start;padding:20px;}img{width:100%;height:auto;}</style></head>"
-        f"<body><img src='{svg_path.name}' alt='snakey'/></body></html>"
-    )
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        html_path = tmp_path / "render.html"
+        tmp_html = tmp_path / html_path.name
         tmp_svg = tmp_path / svg_path.name
         tmp_png = tmp_path / "out.png"
-        html_path.write_text(html, encoding="utf-8")
+        tmp_html.write_text(html_path.read_text(encoding="utf-8"), encoding="utf-8")
         tmp_svg.write_text(svg_path.read_text(encoding="utf-8"), encoding="utf-8")
 
         py = (
             "from playwright.sync_api import sync_playwright\n"
             "with sync_playwright() as p:\n"
             "    browser = p.chromium.launch()\n"
-            f"    page = browser.new_page(viewport={{'width': {width}, 'height': {height}}}, "
+            "    page = browser.new_page("
+            f"viewport={{'width': {page_width}, 'height': {page_height}}}, "
             f"device_scale_factor={scale})\n"
-            f"    page.goto('file://{html_path.as_posix()}')\n"
+            f"    page.goto('file://{tmp_html.as_posix()}')\n"
             "    page.wait_for_timeout(250)\n"
             f"    page.screenshot(path='{tmp_png.as_posix()}', full_page=True)\n"
             "    browser.close()\n"
@@ -156,39 +160,43 @@ def _export_png_with_playwright(
             ) from exc
 
         png_path.parent.mkdir(parents=True, exist_ok=True)
-    png_path.write_bytes(tmp_png.read_bytes())
+        png_path.write_bytes(tmp_png.read_bytes())
 
 
 def _export_pdf_with_playwright(
+    html_path: Path,
     svg_path: Path,
     pdf_path: Path,
-    width: int,
-    height: int,
 ) -> None:
-    html = (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<style>body{margin:0;background:#ffffff;}img{width:100%;height:auto;display:block;}</style></head>"
-        f"<body><img src='{svg_path.name}' alt='snakey'/></body></html>"
-    )
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        html_path = tmp_path / "render.html"
+        tmp_html = tmp_path / html_path.name
         tmp_svg = tmp_path / svg_path.name
         tmp_pdf = tmp_path / "out.pdf"
-        html_path.write_text(html, encoding="utf-8")
+        tmp_html.write_text(html_path.read_text(encoding="utf-8"), encoding="utf-8")
         tmp_svg.write_text(svg_path.read_text(encoding="utf-8"), encoding="utf-8")
 
         py = (
             "from playwright.sync_api import sync_playwright\n"
             "with sync_playwright() as p:\n"
             "    browser = p.chromium.launch()\n"
-            f"    page = browser.new_page(viewport={{'width': {width}, 'height': {height}}})\n"
-            f"    page.goto('file://{html_path.as_posix()}')\n"
+            "    page = browser.new_page(viewport={'width': 2000, 'height': 2000})\n"
+            f"    page.goto('file://{tmp_html.as_posix()}')\n"
+            "    page.wait_for_load_state('networkidle')\n"
             "    page.wait_for_timeout(250)\n"
+            "    root = page.locator('.page')\n"
+            "    box = root.bounding_box()\n"
+            "    if box is None:\n"
+            "        raise RuntimeError('Could not measure HTML page bounds for PDF export.')\n"
+            "    page_height = max(int(box['height']), 1)\n"
+            "    page_width = max(int(box['width']), 1)\n"
             "    page.pdf("
             f"path='{tmp_pdf.as_posix()}', "
             "print_background=True, "
-            f"width='{width}px', height='{height}px')\n"
+            "width=f'{page_width}px', "
+            "height=f'{page_height}px', "
+            "margin={'top': '0', 'right': '0', 'bottom': '0', 'left': '0'}, "
+            "prefer_css_page_size=False)\n"
             "    browser.close()\n"
         )
         try:
@@ -248,23 +256,33 @@ def main() -> None:
         overrides["stage_label_side_policy"] = args.stage_label_side
     config = replace(config_base, **overrides) if overrides else config_base
     scene = layout_snakey(model, config, style)
-    render_svg(scene, args.output)
-    print(f"Wrote SVG: {args.output}")
+    page_width = args.width if args.width is not None else scene.width
+    page_height = args.height if args.height is not None else max(scene.height, 800)
 
-    if args.format in {"png", "both"}:
-        png_path = args.output.with_suffix(".png")
-        _export_png_with_playwright(args.output, png_path, scene.width, scene.height, args.scale)
-        print(f"Wrote PNG: {png_path}")
+    svg_path = args.output
+    html_path = args.output.with_suffix(".html")
 
-    if args.format in {"pdf", "all"}:
-        pdf_path = args.output.with_suffix(".pdf")
-        _export_pdf_with_playwright(args.output, pdf_path, scene.width, scene.height)
-        print(f"Wrote PDF: {pdf_path}")
+    render_svg(scene, svg_path)
+    print(f"Wrote SVG:  {svg_path}")
+    render_html(scene, html_path, page_width=page_width)
+    print(f"Wrote HTML: {html_path}")
 
-    if args.format == "all":
-        png_path = args.output.with_suffix(".png")
-        _export_png_with_playwright(args.output, png_path, scene.width, scene.height, args.scale)
-        print(f"Wrote PNG: {png_path}")
+    if args.format in {"png", "both", "all"}:
+        png_path = svg_path.with_suffix(".png")
+        _export_png_with_playwright(
+            html_path,
+            svg_path,
+            png_path,
+            page_width,
+            page_height,
+            args.scale,
+        )
+        print(f"Wrote PNG:  {png_path}")
+
+    if args.format in {"pdf", "both", "all"}:
+        pdf_path = svg_path.with_suffix(".pdf")
+        _export_pdf_with_playwright(html_path, svg_path, pdf_path)
+        print(f"Wrote PDF:  {pdf_path}")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import base64
+import html
 from pathlib import Path
 
-from .text import wrap_diagram_title
 from .types import NodeAnchor, Scene, SnakeyStyle, TextAnchor
 
 
@@ -402,70 +402,12 @@ def render_svg(scene: Scene, output_path: Path) -> None:
         f'height="{scene.height}" viewBox="0 0 {scene.width} {scene.height}">'
     )
 
-    # Background gradient
+    # Definitions (font embedding for standalone SVG portability)
     parts.append("<defs>")
     font_css = _embedded_font_css(scene)
     if font_css:
         parts.append(f"<style>{font_css}</style>")
-    parts.append(
-        '<linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">')
-    parts.append(f'<stop offset="0%" stop-color="{style.background_start}"/>')
-    parts.append(f'<stop offset="100%" stop-color="{style.background_end}"/>')
-    parts.append("</linearGradient>")
     parts.append("</defs>")
-    parts.append(
-        '<rect x="0" y="0" width="100%" height="100%" fill="url(#bg)"/>')
-
-    # Title / subtitle — wrapped to canvas width, placed at the top of the canvas.
-    # The layout engine has already reserved vertical space via wrap_diagram_title,
-    # so the nodes below will never overlap the text block.
-    pad = scene.config.canvas_fit_padding
-    title_max_width = max(scene.width - 2 * pad, 200.0)
-    wrapped = wrap_diagram_title(scene.title, scene.subtitle, title_max_width, style)
-
-    # Emit title lines using <tspan dy=...> for multi-line support.
-    title_line_height = style.title_size
-    title_baseline_y = pad + style.title_size  # first baseline
-
-    if wrapped.title_lines:
-        tspans = "".join(
-            (
-                f'<tspan x="{pad}" dy="0">{wrapped.title_lines[0]}</tspan>'
-                if i == 0
-                else f'<tspan x="{pad}" dy="{title_line_height}">{line}</tspan>'
-            )
-            for i, line in enumerate(wrapped.title_lines)
-        )
-        parts.append(
-            f'<text x="{pad}" y="{title_baseline_y}" '
-            f'font-family="{style.font_family}" font-size="{style.title_size}" '
-            f'font-weight="700" fill="{style.title_color}">{tspans}</text>'
-        )
-
-    # Subtitle starts after all title lines + configurable gap.
-    n_title = len(wrapped.title_lines)
-    subtitle_baseline_y = (
-        title_baseline_y
-        + max(0, n_title - 1) * title_line_height
-        + style.title_subtitle_gap
-        + style.subtitle_size
-    )
-
-    if wrapped.subtitle_lines:
-        sub_line_height = style.subtitle_size
-        tspans = "".join(
-            (
-                f'<tspan x="{pad}" dy="0">{wrapped.subtitle_lines[0]}</tspan>'
-                if i == 0
-                else f'<tspan x="{pad}" dy="{sub_line_height}">{line}</tspan>'
-            )
-            for i, line in enumerate(wrapped.subtitle_lines)
-        )
-        parts.append(
-            f'<text x="{pad}" y="{subtitle_baseline_y}" '
-            f'font-family="{style.font_family}" font-size="{style.subtitle_size}" '
-            f'fill="{style.subtitle_color}">{tspans}</text>'
-        )
 
     # Edges — paths computed here from final (post-canvas-fit) node positions
     node_map = {na.key: na for na in scene.node_anchors}
@@ -536,3 +478,99 @@ def render_svg(scene: Scene, output_path: Path) -> None:
     parts.append("</svg>")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(parts) + "\n", encoding="utf-8")
+
+
+def render_html(
+    scene: Scene,
+    output_path: Path,
+    *,
+    page_width: int,
+) -> None:
+    """Write an HTML file that places the title/subtitle above the SVG diagram.
+
+    The SVG is referenced by filename; both files must reside in the same
+    directory.  Title and subtitle are laid out by the browser using native
+    font metrics, so long strings wrap correctly without any manual estimation.
+    """
+    style = scene.style
+    pad = scene.config.canvas_fit_padding
+    svg_name = html.escape(output_path.with_suffix(".svg").name)
+
+    # Reuse the same @font-face CSS already embedded in the SVG so the title
+    # renders in the same typeface.
+    font_css = _embedded_font_css(scene)
+
+    title_html = f'<div class="title">{html.escape(scene.title)}</div>' if scene.title else ""
+    subtitle_html = (
+        f'<div class="subtitle">{html.escape(scene.subtitle)}</div>'
+        if scene.subtitle
+        else ""
+    )
+
+    content = f"""\
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    {font_css}
+    :root {{
+      --page-width: {page_width}px;
+      --page-pad: {pad}px;
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      background: linear-gradient(135deg, {style.background_start}, {style.background_end});
+      display: flex;
+      justify-content: center;
+    }}
+    .page {{
+      width: var(--page-width);
+      max-width: 100%;
+      padding: var(--page-pad);
+    }}
+    .title-block {{
+      width: 100%;
+    }}
+    .title {{
+      font-family: {style.font_family};
+      font-size: {style.title_size}px;
+      font-weight: 700;
+      color: {style.title_color};
+      overflow-wrap: break-word;
+      word-wrap: break-word;
+    }}
+    .subtitle {{
+      font-family: {style.font_family};
+      font-size: {style.subtitle_size}px;
+      color: {style.subtitle_color};
+      margin-top: {style.title_subtitle_gap}px;
+      overflow-wrap: break-word;
+      word-wrap: break-word;
+    }}
+    .diagram {{
+      display: block;
+      width: 100%;
+      height: auto;
+      margin-top: {style.title_block_margin}px;
+    }}
+    @page {{
+      size: {page_width}px auto;
+      margin: 0;
+    }}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="title-block">
+      {title_html}
+      {subtitle_html}
+    </div>
+    <img class="diagram" src="{svg_name}" alt="snakey diagram">
+  </div>
+</body>
+</html>
+"""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(content, encoding="utf-8")
