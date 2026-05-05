@@ -7,7 +7,7 @@ surviving count, and each exclusion branches off to the side.
 
 Run the diagram after `benefind classify` is complete. Two steps are required:
 first build the meta JSON that aggregates funnel counts, then render it into
-an SVG (and optionally a PNG).
+an SVG (and optionally a PNG/PDF).
 
 ## Workflow
 
@@ -37,7 +37,8 @@ uv run python scripts/render_filter_funnel_snakey.py
 ```
 
 Reads `data/meta/filter_funnel_meta.json` and writes
-`data/meta/filter_funnel_snakey.svg` and `data/meta/filter_funnel_snakey.png`.
+`data/meta/filter_funnel_snakey.svg` and optional companion `png` / `pdf`
+artifacts depending on the selected output format.
 
 To use a specific visual config (see [Styling and layout](#styling-and-layout)):
 
@@ -59,7 +60,7 @@ Full options:
 --output PATH     SVG output path (default: data/meta/filter_funnel_snakey.svg)
 --config PATH     Layout/style TOML or JSON config file
 --comments PATH   Step context JSON (see Annotating stages below)
---format          svg | png | both  (default: both)
+--format          svg | png | pdf | both | all  (default: both)
 --orientation     top_down | left_right  (default: top_down)
 --branch-side     right | left | alternate  (default: right)
 --stage-label-side  right | left | alternate  (default: left)
@@ -156,6 +157,31 @@ uv run playwright install chromium
 
 The renderer opens the SVG in a headless browser and takes a full-page
 screenshot. If Playwright is unavailable, render with `--format svg` instead.
+
+
+## PDF export
+
+PDF rendering also uses Playwright/Chromium and writes a page-sized PDF from
+the rendered SVG:
+
+```bash
+uv run python scripts/render_filter_funnel_snakey.py --format pdf
+```
+
+Use `--format all` to render SVG + PNG + PDF in one run.
+
+
+## Embedded fonts
+
+Fonts are embedded directly in the generated SVG using base64 `@font-face`
+sources so Illustrator can open the file without local font installation.
+
+By default the renderer embeds Manrope from:
+
+`assets/fonts/manrope/Manrope-VariableFont_wght.ttf`
+
+You can override the embedded family and source files in
+`filter_funnel_snakey_config_example.toml` under `[style]`.
 
 
 ## Re-running

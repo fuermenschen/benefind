@@ -1,7 +1,7 @@
-"""Render filter-funnel snakey visuals (SVG + PNG) from metadata.
+"""Render filter-funnel snakey visuals (SVG + PNG + PDF) from metadata.
 
 Orchestration only: loads inputs, delegates domain mapping to
-benefind.diagram.filter_funnel, runs layout + render, exports PNG.
+benefind.diagram.filter_funnel, runs layout + render, exports raster/vector variants.
 """
 
 from __future__ import annotations
@@ -156,7 +156,51 @@ def _export_png_with_playwright(
             ) from exc
 
         png_path.parent.mkdir(parents=True, exist_ok=True)
-        png_path.write_bytes(tmp_png.read_bytes())
+    png_path.write_bytes(tmp_png.read_bytes())
+
+
+def _export_pdf_with_playwright(
+    svg_path: Path,
+    pdf_path: Path,
+    width: int,
+    height: int,
+) -> None:
+    html = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<style>body{margin:0;background:#ffffff;}img{width:100%;height:auto;display:block;}</style></head>"
+        f"<body><img src='{svg_path.name}' alt='snakey'/></body></html>"
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        html_path = tmp_path / "render.html"
+        tmp_svg = tmp_path / svg_path.name
+        tmp_pdf = tmp_path / "out.pdf"
+        html_path.write_text(html, encoding="utf-8")
+        tmp_svg.write_text(svg_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+        py = (
+            "from playwright.sync_api import sync_playwright\n"
+            "with sync_playwright() as p:\n"
+            "    browser = p.chromium.launch()\n"
+            f"    page = browser.new_page(viewport={{'width': {width}, 'height': {height}}})\n"
+            f"    page.goto('file://{html_path.as_posix()}')\n"
+            "    page.wait_for_timeout(250)\n"
+            "    page.pdf("
+            f"path='{tmp_pdf.as_posix()}', "
+            "print_background=True, "
+            f"width='{width}px', height='{height}px')\n"
+            "    browser.close()\n"
+        )
+        try:
+            subprocess.run(["uv", "run", "python", "-c", py], check=True, cwd=REPO_ROOT)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                "PDF export failed. Ensure Playwright browsers are installed: "
+                "`uv run playwright install chromium`."
+            ) from exc
+
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(tmp_pdf.read_bytes())
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +214,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--config", type=Path, default=None, help="Layout/style TOML or JSON")
     parser.add_argument("--comments", type=Path, default=None, help="Step context JSON")
-    parser.add_argument("--format", choices=["svg", "png", "both"], default="both")
+    parser.add_argument("--format", choices=["svg", "png", "pdf", "both", "all"], default="both")
     parser.add_argument("--orientation", choices=["top_down", "left_right"], default=None)
     parser.add_argument("--branch-side", choices=["right", "left", "alternate"], default=None)
     parser.add_argument("--stage-label-side", choices=["right", "left", "alternate"],
@@ -208,6 +252,16 @@ def main() -> None:
     print(f"Wrote SVG: {args.output}")
 
     if args.format in {"png", "both"}:
+        png_path = args.output.with_suffix(".png")
+        _export_png_with_playwright(args.output, png_path, scene.width, scene.height, args.scale)
+        print(f"Wrote PNG: {png_path}")
+
+    if args.format in {"pdf", "all"}:
+        pdf_path = args.output.with_suffix(".pdf")
+        _export_pdf_with_playwright(args.output, pdf_path, scene.width, scene.height)
+        print(f"Wrote PDF: {pdf_path}")
+
+    if args.format == "all":
         png_path = args.output.with_suffix(".png")
         _export_png_with_playwright(args.output, png_path, scene.width, scene.height, args.scale)
         print(f"Wrote PNG: {png_path}")

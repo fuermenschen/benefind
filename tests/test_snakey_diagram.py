@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 from benefind.diagram.snakey import (
@@ -13,6 +14,7 @@ from benefind.diagram.snakey import (
     TextBlock,
     TrunkNode,
     layout_snakey,
+    render_svg,
 )
 from benefind.diagram.snakey.types import BoundingBox
 
@@ -265,6 +267,28 @@ def test_config_and_comments_merge_into_model(tmp_path: Path) -> None:
     model = build_model(meta, step_context)
     q01 = next(node for node in model.exclusion_nodes if node.key == "ex_q01_target_focus")
     assert "Schritt Kontext Test" in q01.text.context
+
+
+def test_svg_embeds_font_face_by_default(tmp_path: Path) -> None:
+    model = _make_model()
+    scene = layout_snakey(model, LayoutConfig(), SnakeyStyle())
+    out = tmp_path / "snakey.svg"
+    render_svg(scene, out)
+    svg = out.read_text(encoding="utf-8")
+    assert "@font-face" in svg
+    assert "data:font/ttf;base64," in svg
+
+
+def test_parse_args_accepts_pdf_and_all(monkeypatch) -> None:
+    module = _load_render_script_module()
+
+    monkeypatch.setattr(sys, "argv", ["render_filter_funnel_snakey.py", "--format", "pdf"])
+    args_pdf = module._parse_args()
+    assert args_pdf.format == "pdf"
+
+    monkeypatch.setattr(sys, "argv", ["render_filter_funnel_snakey.py", "--format", "all"])
+    args_all = module._parse_args()
+    assert args_all.format == "all"
 
 
 # ---------------------------------------------------------------------------

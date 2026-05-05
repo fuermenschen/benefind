@@ -29,7 +29,16 @@ HighlightMode = Literal["fill", "ring", "ring_fill", "badge", "ring_badge", "rin
 #   right_left — cross flow: start badge on right, end badge on left
 # Absolute options (same cardinal side for both nodes):
 #   above / below / left / right
-BadgeSide = Literal["outward", "inward", "left_right", "right_left", "above", "below", "left", "right"]
+BadgeSide = Literal[
+    "outward",
+    "inward",
+    "left_right",
+    "right_left",
+    "above",
+    "below",
+    "left",
+    "right",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -134,11 +143,6 @@ class LayoutConfig:
     trunk_start_primary: float = 200.0
     trunk_start_secondary: float = 460.0
 
-    # Height (px) reserved at the top of the canvas for the title + subtitle block.
-    # Controls the gap between the subtitle and the first trunk node.
-    # Increase to add more breathing room; decrease to tighten.
-    title_block_height: int = 80
-
     # Text wrap limits
     text_max_width_main_trunk: int = 220
     text_max_width_stage_label: int = 190
@@ -178,7 +182,9 @@ class LayoutConfig:
 
 @dataclass(frozen=True)
 class SnakeyStyle:
-    font_family: str = "Avenir Next, Helvetica Neue, Segoe UI, sans-serif"
+    font_family: str = "Manrope"
+    embedded_font_family: str = "Manrope"
+    embedded_font_files: tuple[str, ...] = ("assets/fonts/manrope/Manrope-VariableFont_wght.ttf",)
     background_start: str = "#f8fafc"
     background_end: str = "#eef2f7"
     title_color: str = "#0f172a"
@@ -194,6 +200,10 @@ class SnakeyStyle:
     context_color: str = "#64748b"
     title_size: int = 36
     subtitle_size: int = 20
+    # Gap between the title text block and the subtitle text block (pixels).
+    title_subtitle_gap: int = 12
+    # Extra whitespace below the subtitle and above the first trunk node (pixels).
+    title_block_margin: int = 24
     block_title_size: int = 18
     block_count_size: int = 16
     block_context_size: int = 14

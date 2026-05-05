@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from .types import ResolvedBlock, ResolvedTextLine, SnakeyStyle, TextBlock
 
 
@@ -73,3 +75,48 @@ def resolve_text_block(text: TextBlock, max_width: int, style: SnakeyStyle) -> R
     width = max_line_width + style.block_padding_x * 2
     height = content_height + style.block_padding_y * 2
     return ResolvedBlock(lines=lines, width=width, height=height)
+
+
+# ---------------------------------------------------------------------------
+# Diagram-level title / subtitle wrapping
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WrappedDiagramTitle:
+    """Wrapped lines and computed pixel height for the diagram title block."""
+
+    title_lines: list[str]
+    subtitle_lines: list[str]
+    # Total height consumed by title + gap + subtitle (not including margin below).
+    block_height: float
+
+
+def wrap_diagram_title(
+    title: str,
+    subtitle: str,
+    max_width: float,
+    style: SnakeyStyle,
+) -> WrappedDiagramTitle:
+    """Wrap the diagram title and subtitle to *max_width* and return wrapped lines
+    plus the total pixel height of the resulting text block.
+
+    Height = (n_title_lines * title_size) + title_subtitle_gap
+             + (n_subtitle_lines * subtitle_size)
+
+    The caller should add *title_block_margin* on top of this value to get the
+    full reservation to shift content nodes down.
+    """
+    title_lines = _wrap_line(title, max_width, style.title_size) if title else []
+    subtitle_lines = _wrap_line(subtitle, max_width, style.subtitle_size) if subtitle else []
+
+    title_height = len(title_lines) * style.title_size
+    subtitle_height = len(subtitle_lines) * style.subtitle_size
+    gap = style.title_subtitle_gap if (title_lines and subtitle_lines) else 0
+
+    block_height = float(title_height + gap + subtitle_height)
+    return WrappedDiagramTitle(
+        title_lines=title_lines,
+        subtitle_lines=subtitle_lines,
+        block_height=block_height,
+    )

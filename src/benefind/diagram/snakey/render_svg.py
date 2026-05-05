@@ -1,8 +1,58 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
-from .types import NodeAnchor, Scene, TextAnchor
+from .text import wrap_diagram_title
+from .types import NodeAnchor, Scene, SnakeyStyle, TextAnchor
+
+
+def _font_mime_type(font_path: Path) -> str:
+    ext = font_path.suffix.lower()
+    if ext == ".woff2":
+        return "font/woff2"
+    if ext == ".woff":
+        return "font/woff"
+    if ext == ".otf":
+        return "font/otf"
+    return "font/ttf"
+
+
+def _font_format_hint(font_path: Path) -> str:
+    ext = font_path.suffix.lower()
+    if ext == ".woff2":
+        return "woff2"
+    if ext == ".woff":
+        return "woff"
+    if ext == ".otf":
+        return "opentype"
+    return "truetype"
+
+
+def _embedded_font_css(scene: Scene) -> str:
+    style = scene.style
+    repo_root = Path(__file__).resolve().parents[4]
+    parts: list[str] = []
+    for font_file in style.embedded_font_files:
+        path = Path(font_file)
+        if not path.is_absolute():
+            cwd_candidate = Path.cwd() / path
+            repo_candidate = repo_root / path
+            path = cwd_candidate if cwd_candidate.exists() else repo_candidate
+        if not path.exists() or not path.is_file():
+            continue
+        font_b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        mime = _font_mime_type(path)
+        fmt = _font_format_hint(path)
+        parts.append(
+            "@font-face {"
+            f"font-family: '{style.embedded_font_family}';"
+            f"src: url('data:{mime};base64,{font_b64}') format('{fmt}');"
+            "font-style: normal;"
+            "font-weight: normal;"
+            "}"
+        )
+    return "".join(parts)
 
 
 def _bezier_path(x0: float, y0: float, x1: float, y1: float, bend: float = 0.5) -> str:
@@ -151,7 +201,11 @@ def _line_style(kind: str, scene: Scene, highlight: bool = False) -> tuple[int, 
     style = scene.style
     if highlight and kind == "title":
         # Only the title line gets the accent color and heavier weight
-        return style.block_title_size, style.highlight_stage_label_title_color, style.highlight_stage_label_font_weight
+        return (
+            style.block_title_size,
+            style.highlight_stage_label_title_color,
+            style.highlight_stage_label_font_weight,
+        )
     if kind == "title":
         return style.block_title_size, style.text_color, "600"
     if kind == "count":
@@ -350,6 +404,9 @@ def render_svg(scene: Scene, output_path: Path) -> None:
 
     # Background gradient
     parts.append("<defs>")
+    font_css = _embedded_font_css(scene)
+    if font_css:
+        parts.append(f"<style>{font_css}</style>")
     parts.append(
         '<linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">')
     parts.append(f'<stop offset="0%" stop-color="{style.background_start}"/>')
@@ -359,21 +416,56 @@ def render_svg(scene: Scene, output_path: Path) -> None:
     parts.append(
         '<rect x="0" y="0" width="100%" height="100%" fill="url(#bg)"/>')
 
-    # Title / subtitle — placed within the title_block_height reservation at the top.
-    # Title baseline sits at pad + title_size; subtitle follows immediately below.
+    # Title / subtitle — wrapped to canvas width, placed at the top of the canvas.
+    # The layout engine has already reserved vertical space via wrap_diagram_title,
+    # so the nodes below will never overlap the text block.
     pad = scene.config.canvas_fit_padding
-    title_y = pad + style.title_size
-    subtitle_y = title_y + style.subtitle_size + 4
-    parts.append(
-        f'<text x="{pad}" y="{title_y}" '
-        f'font-family="{style.font_family}" font-size="{style.title_size}" '
-        f'font-weight="700" fill="{style.title_color}">{scene.title}</text>'
+    title_max_width = max(scene.width - 2 * pad, 200.0)
+    wrapped = wrap_diagram_title(scene.title, scene.subtitle, title_max_width, style)
+
+    # Emit title lines using <tspan dy=...> for multi-line support.
+    title_line_height = style.title_size
+    title_baseline_y = pad + style.title_size  # first baseline
+
+    if wrapped.title_lines:
+        tspans = "".join(
+            (
+                f'<tspan x="{pad}" dy="0">{wrapped.title_lines[0]}</tspan>'
+                if i == 0
+                else f'<tspan x="{pad}" dy="{title_line_height}">{line}</tspan>'
+            )
+            for i, line in enumerate(wrapped.title_lines)
+        )
+        parts.append(
+            f'<text x="{pad}" y="{title_baseline_y}" '
+            f'font-family="{style.font_family}" font-size="{style.title_size}" '
+            f'font-weight="700" fill="{style.title_color}">{tspans}</text>'
+        )
+
+    # Subtitle starts after all title lines + configurable gap.
+    n_title = len(wrapped.title_lines)
+    subtitle_baseline_y = (
+        title_baseline_y
+        + max(0, n_title - 1) * title_line_height
+        + style.title_subtitle_gap
+        + style.subtitle_size
     )
-    parts.append(
-        f'<text x="{pad}" y="{subtitle_y}" '
-        f'font-family="{style.font_family}" font-size="{style.subtitle_size}" '
-        f'fill="{style.subtitle_color}">{scene.subtitle}</text>'
-    )
+
+    if wrapped.subtitle_lines:
+        sub_line_height = style.subtitle_size
+        tspans = "".join(
+            (
+                f'<tspan x="{pad}" dy="0">{wrapped.subtitle_lines[0]}</tspan>'
+                if i == 0
+                else f'<tspan x="{pad}" dy="{sub_line_height}">{line}</tspan>'
+            )
+            for i, line in enumerate(wrapped.subtitle_lines)
+        )
+        parts.append(
+            f'<text x="{pad}" y="{subtitle_baseline_y}" '
+            f'font-family="{style.font_family}" font-size="{style.subtitle_size}" '
+            f'fill="{style.subtitle_color}">{tspans}</text>'
+        )
 
     # Edges — paths computed here from final (post-canvas-fit) node positions
     node_map = {na.key: na for na in scene.node_anchors}

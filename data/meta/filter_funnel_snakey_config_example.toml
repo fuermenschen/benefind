@@ -36,10 +36,6 @@ canvas_fit_mode = "content"
 # Padding (px) added around all diagram content on every side.
 # canvas_fit_padding = 80
 
-# Height (px) reserved at the top of the canvas for the title + subtitle block.
-# Controls the gap between the subtitle and the first trunk node.
-# title_block_height = 80
-
 # Canvas dimensions in px. Only used when canvas_fit_mode = "fixed".
 # width  = 1900
 # height = 1160
@@ -216,7 +212,14 @@ exclusion_text_margin = 16.0
 # ---------------------------------------------------------------------------
 
 # CSS font stack used for all SVG text.
-# font_family = "Avenir Next, Helvetica Neue, Segoe UI, sans-serif"
+# font_family = "Manrope"
+
+# Embedded font family used by generated @font-face rules inside the SVG.
+# embedded_font_family = "Manrope"
+
+# Font files embedded directly in SVG as base64 data URLs.
+# Paths can be absolute or repo-relative.
+# embedded_font_files = ["assets/fonts/manrope/Manrope-VariableFont_wght.ttf"]
 
 # Font sizes (px).
 # title_size        = 36   # diagram title
@@ -224,6 +227,12 @@ exclusion_text_margin = 16.0
 # block_title_size  = 18   # node label first line
 # block_count_size  = 16   # node label count line
 # block_context_size = 14  # node label context/explanation line
+
+# Gap (px) between the title and subtitle text blocks.
+# title_subtitle_gap = 12
+
+# Extra whitespace (px) below the subtitle and above the first trunk node.
+# title_block_margin = 24
 
 # Vertical gap (px) between text lines within a label block.
 # block_line_height = 20

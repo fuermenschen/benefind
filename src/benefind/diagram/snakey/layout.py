@@ -18,7 +18,7 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from .text import resolve_text_block, stroke_width_for
+from .text import resolve_text_block, stroke_width_for, wrap_diagram_title
 from .types import (
     BoundingBox,
     EdgeRoute,
@@ -197,10 +197,10 @@ def _fit_canvas(
     text_anchors: list[TextAnchor],
     edge_routes: list[EdgeRoute],
     config: LayoutConfig,
-    title_block_height: float | None = None,
+    title_block_height: float = 80.0,
 ) -> tuple[list[NodeAnchor], list[TextAnchor], list[EdgeRoute], int, int]:
     pad = float(config.canvas_fit_padding)
-    top_reserve = pad + (float(config.title_block_height) if title_block_height is None else title_block_height)
+    top_reserve = pad + title_block_height
 
     min_x, min_y, max_x, max_y = _scene_bounds(node_anchors, text_anchors, edge_routes)
 
@@ -586,11 +586,24 @@ def layout_snakey(model: SnakeyModel, config: LayoutConfig, style: SnakeyStyle) 
     # ------------------------------------------------------------------
     # 8. Canvas fit
     # ------------------------------------------------------------------
+    # Estimate canvas width from content bounds so we can wrap the title.
+    # We use the raw (pre-fit) bounds here; the fit step will re-apply padding.
+    raw_min_x, _raw_min_y, raw_max_x, _raw_max_y = _scene_bounds(
+        all_node_anchors, resolved_texts, final_edge_routes
+    )
+    pad = float(config.canvas_fit_padding)
+    estimated_canvas_width = (raw_max_x - raw_min_x) + 2 * pad
+    title_max_width = max(estimated_canvas_width - 2 * pad, 200.0)
+
+    wrapped = wrap_diagram_title(model.title, model.subtitle, title_max_width, style)
+    computed_title_block_height = wrapped.block_height + style.title_block_margin
+
     fitted_nodes, fitted_texts, fitted_edges, w, h = _fit_canvas(
         all_node_anchors,
         resolved_texts,
         final_edge_routes,
         config,
+        title_block_height=computed_title_block_height,
     )
 
     return Scene(
