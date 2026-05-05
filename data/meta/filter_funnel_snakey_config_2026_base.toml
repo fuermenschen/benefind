@@ -1,0 +1,321 @@
+# Config 3 — top-down · alternating sides · pastel lavender + rose · pronounced organicness
+#
+# Visual configuration for the filter-funnel Snakey diagram.
+# Pass this file to the renderer with:
+#
+#   uv run python scripts/render_filter_funnel_snakey.py --config path/to/this/file.toml
+#
+# All settings are optional. Omitted settings fall back to the default values
+# shown in comments. CLI flags are applied AFTER the config file and override
+# anything set here.
+# ---------------------------------------------------------------------------
+
+
+# ===========================================================================
+# [layout] — controls where things are placed on the canvas
+# ===========================================================================
+
+[layout]
+
+# ---------------------------------------------------------------------------
+# Canvas
+# ---------------------------------------------------------------------------
+
+# How the output canvas is sized.
+#   "content"  — canvas grows to fit all elements (ignores width/height below)
+#   "fixed"    — canvas is at least width × height (elements may be smaller)
+canvas_fit_mode = "content"
+
+# Padding (px) added around all diagram content on every side.
+canvas_fit_padding = 80
+
+# Height (px) reserved at the top of the canvas for the title + subtitle block.
+# Controls the gap between the subtitle and the first trunk node.
+title_block_height = 150
+
+# Canvas dimensions in px. Only used when canvas_fit_mode = "fixed".
+# width  = 1900
+# height = 1160
+
+
+# ---------------------------------------------------------------------------
+# Orientation
+# ---------------------------------------------------------------------------
+
+# Direction of the main flow through the diagram.
+#   "top_down"   — trunk flows from top to bottom   (default, most common)
+#   "left_right" — trunk flows from left to right
+orientation = "top_down"
+
+
+# ---------------------------------------------------------------------------
+# Stage labels  (the "N orgs remaining" labels alongside the trunk)
+# ---------------------------------------------------------------------------
+
+# Which side of the trunk stage labels appear on.
+#   "left"      — always on the left
+#   "right"     — always on the right
+#   "alternate" — alternates left/right each stage
+stage_label_side_policy = "left"
+
+# Extra gap (px) between the trunk stroke edge and the nearest label edge.
+# Actual clearance = 0.5 * stroke_width_at_this_stage + stage_label_clearance
+stage_label_clearance = 22.0
+
+
+# ---------------------------------------------------------------------------
+# Branch routing  (how exclusion branches leave the trunk)
+# ---------------------------------------------------------------------------
+
+# Path style for exclusion branches.
+#   "direct" — simple Bézier from source to target; can cut through labels
+#   "elbow"  — departs laterally first, then curves to target; avoids label crossings
+#   "spline" — smooth S-curve, softer than elbow
+branch_route_mode = "spline"
+
+# [elbow only] How far along the primary (flow) axis the elbow reaches full
+# lateral extent. 0.0 = bends immediately at the source; 1.0 = bends at target.
+branch_waypoint_primary_frac = 0.4
+
+# [spline only] S-curve tension. 0.0 = handles axis-aligned; 1.0 = handles
+# directed toward the opposite endpoint.
+# branch_spline_tension = 0.5
+
+# [spline only] Handle length as a fraction of the chord between source and target.
+# branch_spline_handle_scale = 0.4
+
+
+# ---------------------------------------------------------------------------
+# Branch layout  (where exclusion branches are positioned around the trunk)
+# ---------------------------------------------------------------------------
+
+# Layout strategy for exclusion branches.
+#   "same_side"           — all branches on one side, same lateral distance
+#   "alternate_sides"     — branches alternate left/right
+#   "same_side_staggered" — all branches on one side, alternating short/long arms
+branch_layout_mode = "alternate_sides"
+
+# Absolute side for same_side and same_side_staggered modes.
+#   "right" / "left" / "alternate"
+branch_side_policy = "right"
+
+# [same_side / alternate_sides] Fixed lateral offset (px) from trunk centre
+# to exclusion node circle.
+branch_offset_secondary = 250.0
+
+# [same_side_staggered] Alternating arm lengths (px) from trunk centre.
+# Even-indexed exclusion branches get the short arm; odd-indexed get the long arm.
+# branch_stagger_short = 180.0
+# branch_stagger_long  = 340.0
+
+
+# ---------------------------------------------------------------------------
+# Spacing along the flow axis
+# ---------------------------------------------------------------------------
+
+# Gap (px) between consecutive trunk nodes along the flow axis.
+trunk_gap_primary = 130.0
+
+# Spacing (px) between exclusion nodes along the flow axis (spreads them apart
+# when multiple steps share the same trunk segment).
+branch_gap_primary = 90.0
+
+# Starting position of the first trunk node (primary axis, i.e. Y for top_down).
+# trunk_start_primary = 200.0
+
+# Cross-axis position of the trunk spine (secondary axis, i.e. X for top_down).
+# trunk_start_secondary = 460.0
+
+
+# ---------------------------------------------------------------------------
+# Text wrapping
+# ---------------------------------------------------------------------------
+
+# Maximum width (px) for text labels before word-wrapping kicks in.
+text_max_width_main_trunk    = 200
+text_max_width_stage_label   = 200
+text_max_width_exclusion_node = 450
+
+# Minimum gap (px) between any two text blocks; the collision resolver nudges
+# blocks apart along the primary axis until this gap is satisfied.
+# min_block_gap = 14.0
+
+
+# ---------------------------------------------------------------------------
+# Node geometry
+# ---------------------------------------------------------------------------
+
+# Radius (px) of exclusion node circles (the dots at branch tips).
+exclusion_node_radius = 8.0
+
+# Gap (px) from the exclusion circle edge to the nearest edge of the text block.
+exclusion_text_margin = 18.0
+
+# Radius (px) of trunk node circles (the dots on the main spine).
+# trunk_node_radius = 5.5
+
+
+# ---------------------------------------------------------------------------
+# Organic trunk wobble  (two overlaid sine waves on the cross axis)
+# Set both amplitudes to 0.0 to draw a perfectly straight trunk.
+# ---------------------------------------------------------------------------
+
+# First sine wave — dominant wobble.
+organic_amplitude_1 = 55.0   # px of lateral displacement
+organic_freq_1      = 1   # cycles per unit of normalised trunk length
+
+# Second sine wave — high-frequency overlay for natural irregularity.
+organic_amplitude_2 = 22.0
+organic_freq_2      = 1.25
+organic_phase_2     = 1.3    # phase offset (radians) to break symmetry
+
+
+# ---------------------------------------------------------------------------
+# Highlight — visual treatment for the first and last trunk nodes
+# ---------------------------------------------------------------------------
+
+# Which visual features to apply to highlighted (start/end) trunk nodes.
+# Features can be combined; pick one of the following literals:
+#   "fill"            — different fill colour only
+#   "ring"            — stroke ring around the node circle only
+#   "ring_fill"       — ring + fill colour
+#   "badge"           — small icon/text badge near the node
+#   "ring_badge"      — ring + badge
+#   "ring_fill_badge" — ring + fill + badge
+highlight_mode = "ring_fill_badge"
+
+# Where the badge is placed relative to the highlighted node.
+# Orientation-relative options (mirror between start and end automatically):
+#   "outward"    — along flow, away from centre (above start / below end for top_down)
+#   "inward"     — along flow, toward centre (mirrored from outward)
+#   "left_right" — cross-flow: start on left, end on right
+#   "right_left" — cross-flow: start on right, end on left
+# Absolute options (same cardinal side for both nodes):
+#   "above" / "below" / "left" / "right"
+# highlight_badge_side = "outward"
+
+# Whether the stage labels at the start/end nodes receive extra visual weight.
+highlight_stage_labels = true
+
+
+# ===========================================================================
+# [style] — controls all colours, fonts, and stroke widths
+# ===========================================================================
+
+[style]
+
+# ---------------------------------------------------------------------------
+# Typography
+# ---------------------------------------------------------------------------
+
+# CSS font stack used for all SVG text.
+# font_family = "Avenir Next, Helvetica Neue, Segoe UI, sans-serif"
+
+# Font sizes (px).
+# title_size        = 36   # diagram title
+# subtitle_size     = 20   # diagram subtitle
+# block_title_size  = 18   # node label first line
+# block_count_size  = 16   # node label count line
+# block_context_size = 14  # node label context/explanation line
+
+# Vertical gap (px) between text lines within a label block.
+# block_line_height = 20
+
+# Horizontal and vertical padding (px) inside text bounding boxes.
+# block_padding_x = 10
+# block_padding_y = 8
+
+
+# ---------------------------------------------------------------------------
+# Colours  (not set here — defined per theme in dark/light config files)
+# ---------------------------------------------------------------------------
+
+# Background — rendered as a linear gradient from top-left to bottom-right.
+# background_start = ""   # top-left corner colour
+# background_end   = ""   # bottom-right corner colour
+
+# Diagram title and subtitle text colours.
+# title_color    = ""
+# subtitle_color = ""
+
+# Main trunk (surviving organisations path).
+# main_trunk_color     = ""
+main_trunk_opacity   = 1.0        # 0.0–1.0
+# main_trunk_node_fill = ""
+
+# Exclusion branches (organisations filtered out).
+# exclusion_branch_color   = ""
+exclusion_branch_opacity = 1.0
+# exclusion_node_fill      = ""
+
+# Text colours — three roles used across all label blocks.
+# text_color        = ""   # primary label text (title line)
+# text_subtle_color = ""   # secondary text (count line)
+# context_color     = ""   # explanatory text (context line)
+
+
+# ---------------------------------------------------------------------------
+# Stroke widths  (scaled proportionally to the number of organisations)
+# ---------------------------------------------------------------------------
+
+# Min and max stroke widths (px) for the trunk path.
+trunk_stroke_min = 3.0
+trunk_stroke_max = 60.0
+
+# Min and max stroke widths (px) for exclusion branch paths.
+branch_stroke_min = 2.0
+branch_stroke_max = 32.0
+
+# Power-law exponent for the stroke-width scale.
+# ratio ^ exponent maps [0,1] → [0,1]. Values below 1.0 compress thin
+# strokes upward (makes small exclusions more visible). Default: 0.7.
+stroke_scale_exponent = 0.70
+
+
+# ---------------------------------------------------------------------------
+# Highlight style  (applied to trunk nodes with highlight = true, i.e. start/end)
+# ---------------------------------------------------------------------------
+
+# Fill colour for highlighted trunk nodes — set per theme.
+# highlight_node_fill = ""
+
+# Ring stroke colour — set per theme.
+# highlight_node_ring_color = ""
+highlight_node_ring_width = 3.0
+
+
+# ---------------------------------------------------------------------------
+# Badge  (icon or text rendered near highlighted nodes when mode includes "badge")
+# ---------------------------------------------------------------------------
+
+# SVG path `d=` string drawn on a 24×24 coordinate grid.
+# The icon is automatically scaled to highlight_badge_size and rotated to
+# point in the flow direction (down for top_down, right for left_right).
+# Default: Tailwind ChevronDoubleDown (two downward chevron strokes).
+# Set to "" to fall back to highlight_badge_text instead.
+# highlight_badge_svg = "M19.5 5.25l-7.5 7.5-7.5-7.5m15 6l-7.5 7.5-7.5-7.5"
+
+# Width and height of the SVG icon (px).
+# highlight_badge_size = 24.0
+
+# Fallback text labels shown when highlight_badge_svg = "".
+# Index 0 = start node, index 1 = end node. Set either to "" to suppress it.
+# highlight_badge_text = ["", ""]
+
+# Colour applied to the badge — set per theme.
+# highlight_badge_color = ""
+
+# Font size (px) used when rendering text badges.
+# highlight_badge_font_size = 18
+
+# Extra space (px) from the ring/stroke edge to the badge centre.
+# highlight_badge_gap = 14.0
+
+
+# ---------------------------------------------------------------------------
+# Highlighted stage label overrides
+# (applied to stage labels at start/end nodes when highlight_stage_labels = true)
+# ---------------------------------------------------------------------------
+
+# highlight_stage_label_title_color — set per theme.
+# highlight_stage_label_font_weight = "700"

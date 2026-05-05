@@ -1,0 +1,28 @@
+# Dark theme overrides for 2026 snakey diagram.
+# Inherits shared layout/style defaults from the base config.
+extends = "filter_funnel_snakey_config_2026_base.toml"
+
+[style]
+background_start = "#1f1814"
+background_end = "#2c211b"
+
+title_color = "#ead9cb"
+subtitle_color = "#cfb29b"
+
+main_trunk_color = "#b58b68"
+main_trunk_opacity = 1.0
+main_trunk_node_fill = "#d2a886"
+
+exclusion_branch_color = "#8f6851"
+exclusion_branch_opacity = 1.0
+exclusion_node_fill = "#b68467"
+
+text_color = "#f1e4da"
+text_subtle_color = "#dcc2af"
+context_color = "#bea18d"
+
+highlight_node_fill = "#d2a886"
+highlight_node_ring_color = "#f4e7da"
+highlight_node_ring_width = 3.0
+highlight_badge_color = "#e2bb91"
+highlight_stage_label_title_color = "#e2bb91"

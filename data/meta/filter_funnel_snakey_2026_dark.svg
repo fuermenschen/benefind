@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1715" height="1548" viewBox="0 0 1715 1548">
+<defs>
+<linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="#1f1814"/>
+<stop offset="100%" stop-color="#2c211b"/>
+</linearGradient>
+</defs>
+<rect x="0" y="0" width="100%" height="100%" fill="url(#bg)"/>
+<text x="80" y="116" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="36" font-weight="700" fill="#ead9cb">Benefizpartner:innen-Suche 2026</text>
+<text x="80" y="140" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="20" fill="#cfb29b">Strukturierte Analyse aller Organisationen, die in Frage kommen könnten. Basiert auf publizierter Liste steuerbefreiter Organisationen im Kanton Zürich.</text>
+<path d="M 877.49 260.00 C 877.49 325.00, 914.84 325.00, 914.84 390.00" fill="none" stroke="#b58b68" stroke-opacity="1.0" stroke-linecap="round" stroke-width="60.00"/>
+<path d="M 914.84 390.00 C 914.84 455.00, 892.84 455.00, 892.84 520.00" fill="none" stroke="#b58b68" stroke-opacity="1.0" stroke-linecap="round" stroke-width="58.95"/>
+<path d="M 892.84 520.00 C 892.84 585.00, 843.30 585.00, 843.30 650.00" fill="none" stroke="#b58b68" stroke-opacity="1.0" stroke-linecap="round" stroke-width="13.46"/>
+<path d="M 843.30 650.00 C 843.30 715.00, 815.04 715.00, 815.04 780.00" fill="none" stroke="#b58b68" stroke-opacity="1.0" stroke-linecap="round" stroke-width="10.67"/>
+<path d="M 815.04 780.00 C 815.04 845.00, 824.54 845.00, 824.54 910.00" fill="none" stroke="#b58b68" stroke-opacity="1.0" stroke-linecap="round" stroke-width="6.89"/>
+<path d="M 824.54 910.00 C 824.54 975.00, 853.79 975.00, 853.79 1040.00" fill="none" stroke="#b58b68" stroke-opacity="1.0" stroke-linecap="round" stroke-width="5.86"/>
+<path d="M 853.79 1040.00 C 853.79 1105.00, 879.55 1105.00, 879.55 1170.00" fill="none" stroke="#b58b68" stroke-opacity="1.0" stroke-linecap="round" stroke-width="5.32"/>
+<path d="M 879.55 1170.00 C 879.55 1235.00, 889.72 1235.00, 889.72 1300.00" fill="none" stroke="#b58b68" stroke-opacity="1.0" stroke-linecap="round" stroke-width="4.95"/>
+<path d="M 889.72 1300.00 C 889.72 1365.00, 878.60 1365.00, 878.60 1430.00" fill="none" stroke="#b58b68" stroke-opacity="1.0" stroke-linecap="round" stroke-width="4.17"/>
+<path d="M 914.84 390.00 C 1014.84 390.00, 1064.84 390.00, 1164.84 390.00" fill="none" stroke="#8f6851" stroke-opacity="1.0" stroke-linecap="round" stroke-width="4.34"/>
+<path d="M 892.84 520.00 C 892.84 520.00, 642.84 520.00, 642.84 520.00" fill="none" stroke="#8f6851" stroke-opacity="1.0" stroke-linecap="round" stroke-width="29.54"/>
+<path d="M 843.30 650.00 C 943.30 650.00, 993.30 650.00, 1093.30 650.00" fill="none" stroke="#8f6851" stroke-opacity="1.0" stroke-linecap="round" stroke-width="4.68"/>
+<path d="M 815.04 780.00 C 815.04 780.00, 565.04 780.00, 565.04 780.00" fill="none" stroke="#8f6851" stroke-opacity="1.0" stroke-linecap="round" stroke-width="4.89"/>
+<path d="M 824.54 910.00 C 924.54 910.00, 974.54 910.00, 1074.54 910.00" fill="none" stroke="#8f6851" stroke-opacity="1.0" stroke-linecap="round" stroke-width="3.00"/>
+<path d="M 853.79 1040.00 C 853.79 1040.00, 603.79 1040.00, 603.79 1040.00" fill="none" stroke="#8f6851" stroke-opacity="1.0" stroke-linecap="round" stroke-width="2.58"/>
+<path d="M 879.55 1170.00 C 979.55 1170.00, 1029.55 1170.00, 1129.55 1170.00" fill="none" stroke="#8f6851" stroke-opacity="1.0" stroke-linecap="round" stroke-width="2.43"/>
+<path d="M 889.72 1300.00 C 889.72 1300.00, 639.72 1300.00, 639.72 1300.00" fill="none" stroke="#8f6851" stroke-opacity="1.0" stroke-linecap="round" stroke-width="2.65"/>
+<circle cx="877.49" cy="260.00" r="10.0" fill="none" stroke="#f4e7da" stroke-width="3.0"/>
+<circle cx="877.49" cy="260.00" r="5.5" fill="#d2a886"/>
+<g transform="translate(865.49,187.50) rotate(0,12.0,12.0) scale(1.0000)"><path d="M19.5 5.25l-7.5 7.5-7.5-7.5m15 6l-7.5 7.5-7.5-7.5" fill="none" stroke="#e2bb91" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+<circle cx="914.84" cy="390.00" r="5.5" fill="#d2a886"/>
+<circle cx="892.84" cy="520.00" r="5.5" fill="#d2a886"/>
+<circle cx="843.30" cy="650.00" r="5.5" fill="#d2a886"/>
+<circle cx="815.04" cy="780.00" r="5.5" fill="#d2a886"/>
+<circle cx="824.54" cy="910.00" r="5.5" fill="#d2a886"/>
+<circle cx="853.79" cy="1040.00" r="5.5" fill="#d2a886"/>
+<circle cx="879.55" cy="1170.00" r="5.5" fill="#d2a886"/>
+<circle cx="889.72" cy="1300.00" r="5.5" fill="#d2a886"/>
+<circle cx="878.60" cy="1430.00" r="10.0" fill="none" stroke="#f4e7da" stroke-width="3.0"/>
+<circle cx="878.60" cy="1430.00" r="5.5" fill="#d2a886"/>
+<g transform="translate(866.60,1450.58) rotate(0,12.0,12.0) scale(1.0000)"><path d="M19.5 5.25l-7.5 7.5-7.5-7.5m15 6l-7.5 7.5-7.5-7.5" fill="none" stroke="#e2bb91" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+<circle cx="1164.84" cy="390.00" r="8.0" fill="#b68467"/>
+<circle cx="642.84" cy="520.00" r="8.0" fill="#b68467"/>
+<circle cx="1093.30" cy="650.00" r="8.0" fill="#b68467"/>
+<circle cx="565.04" cy="780.00" r="8.0" fill="#b68467"/>
+<circle cx="1074.54" cy="910.00" r="8.0" fill="#b68467"/>
+<circle cx="603.79" cy="1040.00" r="8.0" fill="#b68467"/>
+<circle cx="1129.55" cy="1170.00" r="8.0" fill="#b68467"/>
+<circle cx="639.72" cy="1300.00" r="8.0" fill="#b68467"/>
+<text x="834.17" y="311.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="700" fill="#e2bb91">Alle Organisationen</text>
+<text x="834.17" y="331.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="700" fill="#e2bb91">im Kanton Zürich</text>
+<text x="834.17" y="351.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">6'478</text>
+<text x="842.11" y="441.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Rein gemeinnützig</text>
+<text x="842.11" y="461.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">tätig</text>
+<text x="842.11" y="481.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">6'309</text>
+<text x="817.97" y="571.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Organisationen im</text>
+<text x="817.97" y="591.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Bezirk Winterthur</text>
+<text x="817.97" y="611.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">575</text>
+<text x="791.14" y="701.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Nach</text>
+<text x="791.14" y="721.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Webseiten-Prüfung</text>
+<text x="791.14" y="741.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">369</text>
+<text x="783.40" y="841.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Menschen im Fokus</text>
+<text x="783.40" y="861.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">140</text>
+<text x="803.98" y="961.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Regional oder lokal</text>
+<text x="803.98" y="981.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">tätig</text>
+<text x="803.98" y="1001.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">90</text>
+<text x="831.88" y="1091.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Spendenaufruf</text>
+<text x="831.88" y="1111.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">vorhanden</text>
+<text x="831.88" y="1131.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">67</text>
+<text x="850.07" y="1221.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Für finale manuelle</text>
+<text x="850.07" y="1241.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Prüfung freigegeben</text>
+<text x="850.07" y="1261.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">52</text>
+<text x="849.88" y="1351.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="700" fill="#e2bb91">Relevante</text>
+<text x="849.88" y="1371.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="700" fill="#e2bb91">Organisationen</text>
+<text x="849.88" y="1391.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">25</text>
+<text x="1200.84" y="366.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Ausschluss: Nur teilweise steuerbefreit</text>
+<text x="1200.84" y="386.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">169</text>
+<text x="1200.84" y="406.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Organisationen, die nur teilweise einer gemeinnützigen</text>
+<text x="1200.84" y="426.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Tätigkeit nachgehen.</text>
+<text x="606.84" y="496.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Ausschluss: Restlicher Kanton</text>
+<text x="606.84" y="516.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">5'734</text>
+<text x="606.84" y="536.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Nur Organisationen im Bezirk Winterthur wurden weiter</text>
+<text x="606.84" y="556.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">betrachtet.</text>
+<text x="1129.30" y="586.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Ausschluss: Keine Website oder</text>
+<text x="1129.30" y="606.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">offensichtlich unpassend</text>
+<text x="1129.30" y="626.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">206</text>
+<text x="1129.30" y="646.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Organisationen ohne Webseite wurden ausgeschlossen. Im</text>
+<text x="1129.30" y="666.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Zuge dessen wurden auch direkt Organisationen</text>
+<text x="1129.30" y="686.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">ausgeschlossen, die offensichtlich nicht unseren</text>
+<text x="1129.30" y="706.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Anforderungen entsprechen (z.B. der "Natur- und</text>
+<text x="1129.30" y="726.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Vogelschutzverein Winterthur-Seen").</text>
+<text x="529.04" y="746.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Ausschluss: Menschen nicht im Fokus</text>
+<text x="529.04" y="766.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">229</text>
+<text x="529.04" y="786.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Organisationen, bei welchen der Naturschutz, Tierschutz,</text>
+<text x="529.04" y="806.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">die Bildung, Politik, etc., also nicht Menschen im Fokus</text>
+<text x="529.04" y="826.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">steht, wurden ausgeschlossen.</text>
+<text x="1110.54" y="856.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Ausschluss: National oder International</text>
+<text x="1110.54" y="876.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">tätig</text>
+<text x="1110.54" y="896.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">50</text>
+<text x="1110.54" y="916.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Organisationen, die national oder international tätig</text>
+<text x="1110.54" y="936.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">sind, wurden ausgeschlossen. National tätige</text>
+<text x="1110.54" y="956.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Organisationen mit starkem regionalen Fokus wurden nicht</text>
+<text x="1110.54" y="976.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">ausgeschlossen.</text>
+<text x="567.79" y="966.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Ausschluss: Q03 Spendenaufruf</text>
+<text x="567.79" y="986.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">23</text>
+<text x="567.79" y="1006.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Organisationen, die keinen sichtbaren Spendenaufruf</text>
+<text x="567.79" y="1026.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">haben, wurden ausgeschlossen. Ein Vorhandensein einer</text>
+<text x="567.79" y="1046.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">IBAN wurde als Spendenaufruf verstanden. Organisationen,</text>
+<text x="567.79" y="1066.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">die sich aber beispielsweise als Förderstiftung</text>
+<text x="567.79" y="1086.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">bezeichnen und beschreiben, wie ihre Tätigkeit nur aus</text>
+<text x="567.79" y="1106.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">dem Stiftungsvermögen finanziert wird, wurden</text>
+<text x="567.79" y="1126.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">ausgeschlossen.</text>
+<text x="1165.55" y="1136.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Ausschluss: Sanity Check</text>
+<text x="1165.55" y="1156.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">15</text>
+<text x="1165.55" y="1176.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Manuell aussoerierte Organisationen, die bei einer</text>
+<text x="1165.55" y="1196.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">kompletten Durchsicht der verbleibenden Organisationen</text>
+<text x="1165.55" y="1216.00" text-anchor="start" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">als nicht passend erschienen, wurden ausgeschlossen.</text>
+<text x="603.72" y="1216.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="18" font-weight="600" fill="#f1e4da">Ausschluss: Nicht relevante Organisationen</text>
+<text x="603.72" y="1236.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="16" font-weight="500" fill="#dcc2af">27</text>
+<text x="603.72" y="1256.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Die verbleibenden Organisationen wurden manuell geprüft.</text>
+<text x="603.72" y="1276.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">Dabei wurden zum beispiel Organisationen aussortiert, die</text>
+<text x="603.72" y="1296.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">so viel Einkünfte haben, dass eine Spende von uns keinen</text>
+<text x="603.72" y="1316.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">relevanten Unterschied macht. Auch solche, die zu eng mit</text>
+<text x="603.72" y="1336.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">dogmatischen oder religiösen Ansichten verbunden sind,</text>
+<text x="603.72" y="1356.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">wurden ausgeschlossen. Zudem wurden Organisationen</text>
+<text x="603.72" y="1376.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">ausgeschlossen, bei welchen eine Kontaktaufnahme gezeigt</text>
+<text x="603.72" y="1396.00" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#bea18d">hat, dass die Tätigkeit eingestellt wurde.</text>
+</svg>
