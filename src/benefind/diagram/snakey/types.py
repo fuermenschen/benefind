@@ -7,11 +7,16 @@ Orientation = Literal["top_down", "left_right"]
 SidePolicy = Literal["right", "left", "alternate"]
 # same_side_staggered: all exclusions on one side, alternating short/long branch lengths
 BranchLayoutMode = Literal["same_side", "alternate_sides", "same_side_staggered"]
-CanvasFitMode = Literal["fixed", "content"]
 # direct: simple source→target bezier
 # elbow:  two-segment cubic via a lateral waypoint — avoids crossing downstream labels
 # spline: single smooth cubic that departs laterally then curves to target — softer than elbow
 BranchRouteMode = Literal["direct", "elbow", "spline"]
+PageSizeMode = Literal["content", "pixels", "paper"]
+PageFitMode = Literal["contain", "none"]
+PageAlignX = Literal["left", "center", "right"]
+PageAlignY = Literal["top", "center", "bottom"]
+PaperSize = Literal["A5", "A4", "Letter"]
+PaperOrientation = Literal["portrait", "landscape"]
 # Highlight mode controls how start/end trunk nodes are visually distinguished.
 # Modes compose: use "_" to combine features:
 #   fill          — different fill colour only
@@ -94,12 +99,6 @@ class SnakeyModel:
 
 @dataclass(frozen=True)
 class LayoutConfig:
-    # Canvas
-    width: int = 1900
-    height: int = 1160
-    canvas_fit_mode: CanvasFitMode = "content"
-    canvas_fit_padding: int = 80
-
     # Orientation
     orientation: Orientation = "top_down"
 
@@ -253,6 +252,19 @@ class SnakeyStyle:
     # Stage label highlight — overrides title color/weight for stage labels with highlight=True
     highlight_stage_label_title_color: str = "#0284c7"
     highlight_stage_label_font_weight: str = "700"
+
+
+@dataclass(frozen=True)
+class PageLayoutConfig:
+    size_mode: PageSizeMode = "content"
+    fit_mode: PageFitMode = "contain"
+    align_x: PageAlignX = "center"
+    align_y: PageAlignY = "top"
+    paper_size: PaperSize = "A4"
+    paper_orientation: PaperOrientation = "portrait"
+    page_width_px: int = 1900
+    page_height_px: int = 1160
+    page_padding_px: int = 24
 
 
 # ---------------------------------------------------------------------------

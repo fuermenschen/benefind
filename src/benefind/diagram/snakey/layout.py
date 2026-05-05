@@ -159,6 +159,8 @@ def _scene_bounds(
     node_anchors: list[NodeAnchor],
     text_anchors: list[TextAnchor],
     edge_routes: list[EdgeRoute],
+    style: SnakeyStyle,
+    config: LayoutConfig,
 ) -> tuple[float, float, float, float]:
     """Return (min_x, min_y, max_x, max_y) over all scene geometry.
 
@@ -179,13 +181,93 @@ def _scene_bounds(
 
     # For edges: expand each endpoint by half stroke so thick strokes don't clip.
     node_map = {na.key: na for na in node_anchors}
+    trunk_stroke: dict[str, float] = {}
     for er in edge_routes:
         hw = er.stroke_width * 0.5
+        if er.role == "main_trunk":
+            for key in (er.source_key, er.target_key):
+                trunk_stroke[key] = max(trunk_stroke.get(key, 0.0), er.stroke_width)
         for key in (er.source_key, er.target_key):
             na = node_map.get(key)
             if na:
                 xs += [na.x - hw, na.x + hw]
                 ys += [na.y - hw, na.y + hw]
+
+    # Highlight ring + badge extents can exceed node/text/edge bounds.
+    mode = config.highlight_mode
+    use_ring = "ring" in mode
+    use_badge = "badge" in mode
+    highlighted = [na for na in node_anchors if na.highlight]
+    highlighted_keys = [na.key for na in highlighted]
+
+    def _badge_side(badge_index: int) -> str:
+        side = config.highlight_badge_side
+        orientation = config.orientation
+        if side == "outward":
+            if orientation == "top_down":
+                return "above" if badge_index == 0 else "below"
+            return "left" if badge_index == 0 else "right"
+        if side == "inward":
+            if orientation == "top_down":
+                return "below" if badge_index == 0 else "above"
+            return "right" if badge_index == 0 else "left"
+        if side == "left_right":
+            return "left" if badge_index == 0 else "right"
+        if side == "right_left":
+            return "right" if badge_index == 0 else "left"
+        return side
+
+    for na in highlighted:
+        if na.role != "main_trunk":
+            continue
+
+        if use_ring:
+            ring_r = na.radius + style.highlight_node_ring_width + 1.5
+            ring_pad = style.highlight_node_ring_width * 0.5
+            xs += [na.x - ring_r - ring_pad, na.x + ring_r + ring_pad]
+            ys += [na.y - ring_r - ring_pad, na.y + ring_r + ring_pad]
+
+        if not use_badge or not highlighted_keys:
+            continue
+
+        badge_index: int | None = None
+        if na.key == highlighted_keys[0]:
+            badge_index = 0
+        elif na.key == highlighted_keys[-1]:
+            badge_index = 1
+        if badge_index is None:
+            continue
+
+        stroke_half = trunk_stroke.get(na.key, 0.0) * 0.5
+        ring_extent = (style.highlight_node_ring_width + 1.5) if use_ring else 0.0
+        icon_half = style.highlight_badge_size / 2.0 if style.highlight_badge_svg else 0.0
+        clearance = stroke_half + ring_extent + style.highlight_badge_gap + icon_half
+
+        side = _badge_side(badge_index)
+        bx = na.x
+        by = na.y
+        if side == "above":
+            by -= clearance
+        elif side == "below":
+            by += clearance
+        elif side == "left":
+            bx -= clearance
+        else:
+            bx += clearance
+
+        if style.highlight_badge_svg:
+            half_w = style.highlight_badge_size * 0.5
+            half_h = style.highlight_badge_size * 0.5
+        else:
+            texts = style.highlight_badge_text
+            label = texts[badge_index] if badge_index < len(texts) else ""
+            if not label:
+                continue
+            half_h = style.highlight_badge_font_size * 0.6
+            half_w = max(half_h, len(label) * style.highlight_badge_font_size * 0.3)
+
+        xs += [bx - half_w, bx + half_w]
+        ys += [by - half_h, by + half_h]
 
     if not xs or not ys:
         return 0.0, 0.0, 0.0, 0.0
@@ -197,12 +279,18 @@ def _fit_canvas(
     text_anchors: list[TextAnchor],
     edge_routes: list[EdgeRoute],
     config: LayoutConfig,
-    title_block_height: float = 80.0,
+    style: SnakeyStyle,
 ) -> tuple[list[NodeAnchor], list[TextAnchor], list[EdgeRoute], int, int]:
-    pad = float(config.canvas_fit_padding)
-    top_reserve = pad + title_block_height
+    pad = 0.0
+    top_reserve = 0.0
 
-    min_x, min_y, max_x, max_y = _scene_bounds(node_anchors, text_anchors, edge_routes)
+    min_x, min_y, max_x, max_y = _scene_bounds(
+        node_anchors,
+        text_anchors,
+        edge_routes,
+        style,
+        config,
+    )
 
     # Shift everything so content starts at (pad, top_reserve)
     dx = pad - min_x
@@ -221,14 +309,16 @@ def _fit_canvas(
     ]
 
     # Recompute bounds after shift
-    _, _, new_max_x, new_max_y = _scene_bounds(shifted_nodes, shifted_texts, shifted_edges)
+    _, _, new_max_x, new_max_y = _scene_bounds(
+        shifted_nodes,
+        shifted_texts,
+        shifted_edges,
+        style,
+        config,
+    )
 
     w = int(math.ceil(new_max_x + pad))
     h = int(math.ceil(new_max_y + pad))
-
-    if config.canvas_fit_mode == "fixed":
-        w = max(w, config.width)
-        h = max(h, config.height)
 
     return shifted_nodes, shifted_texts, shifted_edges, w, h
 
@@ -593,7 +683,7 @@ def layout_snakey(model: SnakeyModel, config: LayoutConfig, style: SnakeyStyle) 
         resolved_texts,
         final_edge_routes,
         config,
-        title_block_height=0.0,
+        style,
     )
 
     return Scene(

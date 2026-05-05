@@ -136,12 +136,7 @@ def _build_cases() -> list[KnobCase]:
         "highlight_badge_svg": "",
         "highlight_badge_text": ("START", "END"),
     }
-    cases = [
-        KnobCase("layout", "width", 2300, "scene", active_overrides={"canvas_fit_mode": "fixed"}),
-        KnobCase("layout", "height", 1500, "scene", active_overrides={"canvas_fit_mode": "fixed"}),
-        KnobCase("layout", "canvas_fit_mode", "fixed", "scene"),
-        KnobCase("layout", "canvas_fit_padding", 140, "scene"),
-        KnobCase("layout", "orientation", "left_right", "scene"),
+    cases = [KnobCase("layout", "orientation", "left_right", "scene"),
         KnobCase("layout", "stage_label_side_policy", "alternate", "scene"),
         KnobCase("layout", "stage_label_clearance", 42.0, "scene"),
         KnobCase("layout", "branch_route_mode", "direct", "scene"),

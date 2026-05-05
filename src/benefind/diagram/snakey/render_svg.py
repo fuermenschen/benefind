@@ -4,7 +4,7 @@ import base64
 import html
 from pathlib import Path
 
-from .types import NodeAnchor, Scene, SnakeyStyle, TextAnchor
+from .types import NodeAnchor, PageLayoutConfig, Scene, SnakeyStyle, TextAnchor
 
 
 def _font_mime_type(font_path: Path) -> str:
@@ -484,7 +484,9 @@ def render_html(
     scene: Scene,
     output_path: Path,
     *,
+    page: PageLayoutConfig,
     page_width: int,
+    page_height: int,
 ) -> None:
     """Write an HTML file that places the title/subtitle above the SVG diagram.
 
@@ -493,7 +495,6 @@ def render_html(
     font metrics, so long strings wrap correctly without any manual estimation.
     """
     style = scene.style
-    pad = scene.config.canvas_fit_padding
     svg_name = html.escape(output_path.with_suffix(".svg").name)
 
     # Reuse the same @font-face CSS already embedded in the SVG so the title
@@ -507,6 +508,21 @@ def render_html(
         else ""
     )
 
+    fit_rule = "max-width: 100%; max-height: 100%; width: auto; height: auto;"
+    if page.fit_mode == "none":
+        fit_rule = "width: auto; height: auto;"
+
+    justify_content = {
+        "left": "flex-start",
+        "center": "center",
+        "right": "flex-end",
+    }[page.align_x]
+    align_items = {
+        "top": "flex-start",
+        "center": "center",
+        "bottom": "flex-end",
+    }[page.align_y]
+
     content = f"""\
 <!doctype html>
 <html>
@@ -517,7 +533,8 @@ def render_html(
     {font_css}
     :root {{
       --page-width: {page_width}px;
-      --page-pad: {pad}px;
+      --page-height: {page_height}px;
+      --page-pad: {page.page_padding_px}px;
     }}
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
@@ -527,8 +544,10 @@ def render_html(
     }}
     .page {{
       width: var(--page-width);
-      max-width: 100%;
+      height: var(--page-height);
       padding: var(--page-pad);
+      display: flex;
+      flex-direction: column;
     }}
     .title-block {{
       width: 100%;
@@ -549,11 +568,18 @@ def render_html(
       overflow-wrap: break-word;
       word-wrap: break-word;
     }}
+    .diagram-wrap {{
+      margin-top: {style.title_block_margin}px;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      justify-content: {justify_content};
+      align-items: {align_items};
+      overflow: hidden;
+    }}
     .diagram {{
       display: block;
-      width: 100%;
-      height: auto;
-      margin-top: {style.title_block_margin}px;
+      {fit_rule}
     }}
     @page {{
       size: {page_width}px auto;
@@ -562,12 +588,14 @@ def render_html(
   </style>
 </head>
 <body>
-  <div class="page">
+  <div class="page" id="page-root">
     <div class="title-block">
       {title_html}
       {subtitle_html}
     </div>
-    <img class="diagram" src="{svg_name}" alt="snakey diagram">
+    <div class="diagram-wrap">
+      <img class="diagram" src="{svg_name}" alt="snakey diagram">
+    </div>
   </div>
 </body>
 </html>

@@ -8,6 +8,7 @@ from pathlib import Path
 from benefind.diagram.snakey import (
     ExclusionNode,
     LayoutConfig,
+    PageLayoutConfig,
     SnakeyModel,
     SnakeyStyle,
     StageLabel,
@@ -132,7 +133,7 @@ def test_exclusion_text_does_not_overlap_circle() -> None:
 def test_content_fit_mode_no_clipping() -> None:
     """In content fit mode, all text anchors must be within canvas bounds."""
     model = _make_model()
-    config = LayoutConfig(canvas_fit_mode="content", canvas_fit_padding=60)
+    config = LayoutConfig()
     style = SnakeyStyle()
     scene = layout_snakey(model, config, style)
 
@@ -173,7 +174,6 @@ def test_stage_label_clearance_respects_stroke() -> None:
             exclusion_nodes=[],
         )
         cfg = LayoutConfig(
-            canvas_fit_mode="content",
             stage_label_side_policy="left",
             organic_amplitude_1=0.0,
             organic_amplitude_2=0.0,
@@ -254,7 +254,7 @@ def test_config_and_comments_merge_into_model(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    layout_cfg, style_cfg = module._load_config_file(config_path)
+    layout_cfg, style_cfg, _ = module._load_config_file(config_path)
     assert layout_cfg.orientation == "left_right"
     assert layout_cfg.text_max_width_exclusion_node == 420
     assert style_cfg.block_context_size == 15
@@ -300,7 +300,13 @@ def test_html_owns_page_background_and_width(tmp_path: Path) -> None:
     style = SnakeyStyle(background_start="#112233", background_end="#334455")
     scene = layout_snakey(model, LayoutConfig(), style)
     out = tmp_path / "snakey.html"
-    render_html(scene, out, page_width=1777)
+    render_html(
+        scene,
+        out,
+        page=PageLayoutConfig(),
+        page_width=1777,
+        page_height=1300,
+    )
     html_doc = out.read_text(encoding="utf-8")
     assert "--page-width: 1777px;" in html_doc
     assert "linear-gradient(135deg, #112233, #334455)" in html_doc
@@ -338,7 +344,7 @@ def test_extends_child_overrides_parent(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    layout_cfg, style_cfg = module._load_config_file(child)
+    layout_cfg, style_cfg, _ = module._load_config_file(child)
     assert layout_cfg.orientation == "left_right"      # inherited from parent
     assert style_cfg.background_start == "#ff0000"     # overridden by child
 
@@ -354,7 +360,7 @@ def test_extends_parent_value_kept_when_child_silent(tmp_path: Path) -> None:
     child.write_text('extends = "base.toml"\n\n[style]\nbackground_end = "#child_end"\n',
                      encoding="utf-8")
 
-    _, style_cfg = module._load_config_file(child)
+    _, style_cfg, _ = module._load_config_file(child)
     assert style_cfg.background_start == "#base"       # untouched by child
     assert style_cfg.background_end == "#child_end"    # overridden by child
 
@@ -367,7 +373,7 @@ def test_extends_no_parent_key_gives_defaults(tmp_path: Path) -> None:
     child = tmp_path / "minimal.toml"
     child.write_text("[layout]\norientation = 'top_down'\n", encoding="utf-8")
 
-    _, style_cfg = module._load_config_file(child)
+    _, style_cfg, _ = module._load_config_file(child)
     assert style_cfg == SnakeyStyle()
 
 
@@ -414,10 +420,10 @@ def test_extends_real_theme_configs() -> None:
     module = _load_render_script_module()
     meta_dir = Path(__file__).resolve().parents[1] / "data" / "meta"
 
-    dark_layout, dark_style = module._load_config_file(
+    dark_layout, dark_style, _ = module._load_config_file(
         meta_dir / "filter_funnel_snakey_config_2026_dark.toml"
     )
-    light_layout, light_style = module._load_config_file(
+    light_layout, light_style, _ = module._load_config_file(
         meta_dir / "filter_funnel_snakey_config_2026_light.toml"
     )
 

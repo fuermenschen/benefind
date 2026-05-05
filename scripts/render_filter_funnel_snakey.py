@@ -17,6 +17,7 @@ from pathlib import Path
 from benefind.diagram.filter_funnel import build_model
 from benefind.diagram.snakey import (
     LayoutConfig,
+    PageLayoutConfig,
     SnakeyStyle,
     layout_snakey,
     render_html,
@@ -69,11 +70,12 @@ def _load_config_file(
     path: Path | None,
     *,
     _seen: frozenset[Path] | None = None,
-) -> tuple[LayoutConfig, SnakeyStyle]:
+) -> tuple[LayoutConfig, SnakeyStyle, PageLayoutConfig]:
     layout = LayoutConfig()
     style = SnakeyStyle()
+    page = PageLayoutConfig()
     if path is None:
-        return layout, style
+        return layout, style, page
 
     path = path.resolve()
     seen = (_seen or frozenset()) | {path}
@@ -94,13 +96,44 @@ def _load_config_file(
         if parent_path in seen:
             chain = " -> ".join(str(p) for p in [*seen, parent_path])
             raise ValueError(f"Cyclic 'extends' detected: {chain}")
-        layout, style = _load_config_file(parent_path, _seen=seen)
+        layout, style, page = _load_config_file(parent_path, _seen=seen)
 
     if isinstance(raw.get("layout"), dict):
         layout = _apply_overrides(layout, raw["layout"])  # type: ignore[arg-type]
     if isinstance(raw.get("style"), dict):
         style = _apply_overrides(style, raw["style"])  # type: ignore[arg-type]
-    return layout, style
+    if isinstance(raw.get("page"), dict):
+        page = _apply_overrides(page, raw["page"])  # type: ignore[arg-type]
+    return layout, style, page
+
+
+def _paper_size_px(size: str, orientation: str) -> tuple[int, int]:
+    # CSS reference pixels at 96 DPI.
+    mm_to_px = 96.0 / 25.4
+    presets_mm: dict[str, tuple[float, float]] = {
+        "A5": (148.0, 210.0),
+        "A4": (210.0, 297.0),
+        "Letter": (215.9, 279.4),
+    }
+    w_mm, h_mm = presets_mm[size]
+    if orientation == "landscape":
+        w_mm, h_mm = h_mm, w_mm
+    return int(round(w_mm * mm_to_px)), int(round(h_mm * mm_to_px))
+
+
+def _resolve_page_size(
+    page: PageLayoutConfig,
+    scene_width: int,
+    scene_height: int,
+) -> tuple[int, int]:
+    if page.size_mode == "content":
+        pad = max(page.page_padding_px, 0)
+        return scene_width + (pad * 2), scene_height + (pad * 2)
+    if page.size_mode == "paper":
+        return _paper_size_px(page.paper_size, page.paper_orientation)
+    width = max(int(page.page_width_px), 1)
+    height = max(int(page.page_height_px), 1)
+    return width, height
 
 
 def _load_step_context(path: Path | None) -> dict[str, str]:
@@ -184,12 +217,12 @@ def _export_pdf_with_playwright(
             f"    page.goto('file://{tmp_html.as_posix()}')\n"
             "    page.wait_for_load_state('networkidle')\n"
             "    page.wait_for_timeout(250)\n"
-            "    root = page.locator('.page')\n"
+            "    root = page.locator('#page-root')\n"
             "    box = root.bounding_box()\n"
             "    if box is None:\n"
             "        raise RuntimeError('Could not measure HTML page bounds for PDF export.')\n"
-            "    page_height = max(int(box['height']), 1)\n"
-            "    page_width = max(int(box['width']), 1)\n"
+            "    page_height = max(int(round(box['height'])), 1)\n"
+            "    page_width = max(int(round(box['width'])), 1)\n"
             "    page.pdf("
             f"path='{tmp_pdf.as_posix()}', "
             "print_background=True, "
@@ -229,6 +262,13 @@ def _parse_args() -> argparse.Namespace:
                         default=None)
     parser.add_argument("--width", type=int, default=None)
     parser.add_argument("--height", type=int, default=None)
+    parser.add_argument("--page-size-mode", choices=["content", "pixels", "paper"], default=None)
+    parser.add_argument("--page-fit", choices=["contain", "none"], default=None)
+    parser.add_argument("--page-align-x", choices=["left", "center", "right"], default=None)
+    parser.add_argument("--page-align-y", choices=["top", "center", "bottom"], default=None)
+    parser.add_argument("--page-paper", choices=["A5", "A4", "Letter"], default=None)
+    parser.add_argument("--page-orientation", choices=["portrait", "landscape"], default=None)
+    parser.add_argument("--page-padding", type=int, default=None)
     parser.add_argument("--scale", type=int, default=2)
     return parser.parse_args()
 
@@ -239,15 +279,11 @@ def main() -> None:
     with args.input.open("r", encoding="utf-8") as f:
         meta = json.load(f)
 
-    config_base, style = _load_config_file(args.config)
+    config_base, style, page_base = _load_config_file(args.config)
     step_context = _load_step_context(args.comments)
 
     model = build_model(meta, step_context)
     overrides: dict[str, object] = {}
-    if args.width is not None:
-        overrides["width"] = args.width
-    if args.height is not None:
-        overrides["height"] = args.height
     if args.orientation is not None:
         overrides["orientation"] = args.orientation
     if args.branch_side is not None:
@@ -255,16 +291,42 @@ def main() -> None:
     if args.stage_label_side is not None:
         overrides["stage_label_side_policy"] = args.stage_label_side
     config = replace(config_base, **overrides) if overrides else config_base
+    page_overrides: dict[str, object] = {}
+    if args.page_size_mode is not None:
+        page_overrides["size_mode"] = args.page_size_mode
+    if args.page_fit is not None:
+        page_overrides["fit_mode"] = args.page_fit
+    if args.page_align_x is not None:
+        page_overrides["align_x"] = args.page_align_x
+    if args.page_align_y is not None:
+        page_overrides["align_y"] = args.page_align_y
+    if args.page_paper is not None:
+        page_overrides["paper_size"] = args.page_paper
+    if args.page_orientation is not None:
+        page_overrides["paper_orientation"] = args.page_orientation
+    if args.width is not None:
+        page_overrides["page_width_px"] = args.width
+    if args.height is not None:
+        page_overrides["page_height_px"] = args.height
+    if args.page_padding is not None:
+        page_overrides["page_padding_px"] = args.page_padding
+    page = replace(page_base, **page_overrides) if page_overrides else page_base
+
     scene = layout_snakey(model, config, style)
-    page_width = args.width if args.width is not None else scene.width
-    page_height = args.height if args.height is not None else max(scene.height, 800)
+    page_width, page_height = _resolve_page_size(page, scene.width, scene.height)
 
     svg_path = args.output
     html_path = args.output.with_suffix(".html")
 
     render_svg(scene, svg_path)
     print(f"Wrote SVG:  {svg_path}")
-    render_html(scene, html_path, page_width=page_width)
+    render_html(
+        scene,
+        html_path,
+        page=page,
+        page_width=page_width,
+        page_height=page_height,
+    )
     print(f"Wrote HTML: {html_path}")
 
     if args.format in {"png", "both", "all"}:

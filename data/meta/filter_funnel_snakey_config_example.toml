@@ -16,30 +16,11 @@
 # Only the fields you want to change need to be uncommented. The minimal
 # working example at the top of each section is a good starting point.
 # ---------------------------------------------------------------------------
-
-
 # ===========================================================================
 # [layout] — controls where things are placed on the canvas
 # ===========================================================================
 
 [layout]
-
-# ---------------------------------------------------------------------------
-# Canvas
-# ---------------------------------------------------------------------------
-
-# How the output canvas is sized.
-#   "content"  — canvas grows to fit all elements (ignores width/height below)
-#   "fixed"    — canvas is at least width × height (elements may be smaller)
-canvas_fit_mode = "content"
-
-# Padding (px) added around all diagram content on every side.
-# canvas_fit_padding = 80
-
-# Canvas dimensions in px. Only used when canvas_fit_mode = "fixed".
-# width  = 1900
-# height = 1160
-
 
 # ---------------------------------------------------------------------------
 # Orientation
@@ -199,6 +180,39 @@ exclusion_text_margin = 16.0
 
 # Whether the stage labels at the start/end nodes receive extra visual weight.
 # highlight_stage_labels = true
+
+
+# ===========================================================================
+# [page] — controls HTML/PDF/PNG page composition around the SVG
+# ===========================================================================
+
+[page]
+
+# Page sizing mode:
+#   "content" — page grows to diagram content bounds (+ padding)
+#   "pixels"  — fixed pixel page_width_px × page_height_px
+#   "paper"   — named paper size + orientation
+size_mode = "content"
+
+# Fit strategy when diagram is larger than available page content box:
+#   "contain" — scale down to fit, no overflow / no extra PDF page
+#   "none"    — keep native size (can overflow)
+fit_mode = "contain"
+
+# Alignment of the diagram within the available frame.
+align_x = "center"
+align_y = "top"
+
+# Paper preset (used when size_mode = "paper").
+# paper_size = "A4"           # A5 | A4 | Letter
+# paper_orientation = "portrait"  # portrait | landscape
+
+# Pixel dimensions (used when size_mode = "pixels").
+# page_width_px = 1900
+# page_height_px = 1160
+
+# Inner page padding (px).
+page_padding_px = 24
 
 
 # ===========================================================================
