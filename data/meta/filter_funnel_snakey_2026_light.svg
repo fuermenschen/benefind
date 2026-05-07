@@ -6,19 +6,19 @@
 <path d="M 801.97 72.50 C 801.97 172.50, 839.32 172.50, 839.32 272.50" fill="none" stroke="#b06e44" stroke-opacity="1.0" stroke-linecap="round" stroke-width="60.00"/>
 <path d="M 839.32 272.50 C 839.32 372.50, 817.32 372.50, 817.32 472.50" fill="none" stroke="#b06e44" stroke-opacity="1.0" stroke-linecap="round" stroke-width="58.95"/>
 <path d="M 817.32 472.50 C 817.32 572.50, 767.78 572.50, 767.78 672.50" fill="none" stroke="#b06e44" stroke-opacity="1.0" stroke-linecap="round" stroke-width="13.46"/>
-<path d="M 767.78 672.50 C 767.78 772.50, 739.52 772.50, 739.52 872.50" fill="none" stroke="#b06e44" stroke-opacity="1.0" stroke-linecap="round" stroke-width="10.67"/>
-<path d="M 739.52 872.50 C 739.52 972.50, 749.02 972.50, 749.02 1072.50" fill="none" stroke="#b06e44" stroke-opacity="1.0" stroke-linecap="round" stroke-width="6.89"/>
-<path d="M 749.02 1072.50 C 749.02 1172.50, 778.27 1172.50, 778.27 1272.50" fill="none" stroke="#b06e44" stroke-opacity="1.0" stroke-linecap="round" stroke-width="5.86"/>
-<path d="M 778.27 1272.50 C 778.27 1372.50, 804.03 1372.50, 804.03 1472.50" fill="none" stroke="#b06e44" stroke-opacity="1.0" stroke-linecap="round" stroke-width="5.32"/>
+<path d="M 767.78 672.50 C 767.78 772.50, 739.52 772.50, 739.52 872.50" fill="none" stroke="#b06e44" stroke-opacity="1.0" stroke-linecap="round" stroke-width="10.64"/>
+<path d="M 739.52 872.50 C 739.52 972.50, 749.02 972.50, 749.02 1072.50" fill="none" stroke="#b06e44" stroke-opacity="1.0" stroke-linecap="round" stroke-width="6.85"/>
+<path d="M 749.02 1072.50 C 749.02 1172.50, 778.27 1172.50, 778.27 1272.50" fill="none" stroke="#b06e44" stroke-opacity="1.0" stroke-linecap="round" stroke-width="5.81"/>
+<path d="M 778.27 1272.50 C 778.27 1372.50, 804.03 1372.50, 804.03 1472.50" fill="none" stroke="#b06e44" stroke-opacity="1.0" stroke-linecap="round" stroke-width="5.27"/>
 <path d="M 804.03 1472.50 C 804.03 1572.50, 814.20 1572.50, 814.20 1672.50" fill="none" stroke="#b06e44" stroke-opacity="1.0" stroke-linecap="round" stroke-width="4.95"/>
 <path d="M 814.20 1672.50 C 814.20 1772.50, 803.08 1772.50, 803.08 1872.50" fill="none" stroke="#b06e44" stroke-opacity="1.0" stroke-linecap="round" stroke-width="4.17"/>
 <path d="M 839.32 272.50 C 939.32 272.50, 989.32 272.50, 1089.32 272.50" fill="none" stroke="#cf8b5f" stroke-opacity="1.0" stroke-linecap="round" stroke-width="4.34"/>
 <path d="M 817.32 472.50 C 817.32 472.50, 567.32 472.50, 567.32 472.50" fill="none" stroke="#cf8b5f" stroke-opacity="1.0" stroke-linecap="round" stroke-width="29.54"/>
-<path d="M 767.78 672.50 C 867.78 672.50, 917.78 672.50, 1017.78 672.50" fill="none" stroke="#cf8b5f" stroke-opacity="1.0" stroke-linecap="round" stroke-width="4.68"/>
+<path d="M 767.78 672.50 C 867.78 672.50, 917.78 672.50, 1017.78 672.50" fill="none" stroke="#cf8b5f" stroke-opacity="1.0" stroke-linecap="round" stroke-width="4.70"/>
 <path d="M 739.52 872.50 C 739.52 872.50, 489.52 872.50, 489.52 872.50" fill="none" stroke="#cf8b5f" stroke-opacity="1.0" stroke-linecap="round" stroke-width="4.89"/>
 <path d="M 749.02 1072.50 C 849.02 1072.50, 899.02 1072.50, 999.02 1072.50" fill="none" stroke="#cf8b5f" stroke-opacity="1.0" stroke-linecap="round" stroke-width="3.00"/>
 <path d="M 778.27 1272.50 C 778.27 1272.50, 528.27 1272.50, 528.27 1272.50" fill="none" stroke="#cf8b5f" stroke-opacity="1.0" stroke-linecap="round" stroke-width="2.58"/>
-<path d="M 804.03 1472.50 C 904.03 1472.50, 954.03 1472.50, 1054.03 1472.50" fill="none" stroke="#cf8b5f" stroke-opacity="1.0" stroke-linecap="round" stroke-width="2.43"/>
+<path d="M 804.03 1472.50 C 904.03 1472.50, 954.03 1472.50, 1054.03 1472.50" fill="none" stroke="#cf8b5f" stroke-opacity="1.0" stroke-linecap="round" stroke-width="2.39"/>
 <path d="M 814.20 1672.50 C 814.20 1672.50, 564.20 1672.50, 564.20 1672.50" fill="none" stroke="#cf8b5f" stroke-opacity="1.0" stroke-linecap="round" stroke-width="2.65"/>
 <circle cx="801.97" cy="72.50" r="10.0" fill="none" stroke="#fff3e8" stroke-width="3.0"/>
 <circle cx="801.97" cy="72.50" r="5.5" fill="#d28a56"/>
@@ -56,20 +56,20 @@
 <text x="742.45" y="608.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">575</text>
 <text x="715.62" y="758.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Nach</text>
 <text x="715.62" y="778.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Webseiten-Prüfung</text>
-<text x="715.62" y="798.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">369</text>
-<text x="707.88" y="958.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Menschen im</text>
-<text x="707.88" y="978.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Fokus</text>
-<text x="707.88" y="998.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">140</text>
-<text x="728.46" y="1158.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Regional oder</text>
-<text x="728.46" y="1178.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">lokal tätig</text>
-<text x="728.46" y="1198.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">90</text>
-<text x="756.36" y="1358.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Spendenaufruf</text>
-<text x="756.36" y="1378.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">vorhanden</text>
-<text x="756.36" y="1398.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">67</text>
-<text x="774.55" y="1548.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Für finale</text>
-<text x="774.55" y="1568.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">manuelle Prüfung</text>
-<text x="774.55" y="1588.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">freigegeben</text>
-<text x="774.55" y="1608.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">52</text>
+<text x="715.62" y="798.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">367</text>
+<text x="707.90" y="958.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Menschen im</text>
+<text x="707.90" y="978.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Fokus</text>
+<text x="707.90" y="998.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">138</text>
+<text x="728.48" y="1158.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Regional oder</text>
+<text x="728.48" y="1178.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">lokal tätig</text>
+<text x="728.48" y="1198.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">88</text>
+<text x="756.38" y="1358.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Spendenaufruf</text>
+<text x="756.38" y="1378.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">vorhanden</text>
+<text x="756.38" y="1398.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">65</text>
+<text x="774.56" y="1548.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Für finale</text>
+<text x="774.56" y="1568.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">manuelle Prüfung</text>
+<text x="774.56" y="1588.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">freigegeben</text>
+<text x="774.56" y="1608.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">52</text>
 <text x="774.36" y="1758.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="700" fill="#a55f31">Relevante</text>
 <text x="774.36" y="1778.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="700" fill="#a55f31">Organisationen</text>
 <text x="774.36" y="1798.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">25</text>
@@ -84,7 +84,7 @@
 <text x="531.32" y="508.50" text-anchor="end" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">wurden weiter betrachtet.</text>
 <text x="1053.78" y="598.50" text-anchor="start" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Ausschluss: Keine Website oder</text>
 <text x="1053.78" y="618.50" text-anchor="start" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">offensichtlich unpassend</text>
-<text x="1053.78" y="638.50" text-anchor="start" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">206</text>
+<text x="1053.78" y="638.50" text-anchor="start" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">208</text>
 <text x="1053.78" y="658.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">Organisationen ohne Webseite wurden</text>
 <text x="1053.78" y="678.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">ausgeschlossen. Im Zuge dessen wurden auch</text>
 <text x="1053.78" y="698.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">direkt Organisationen ausgeschlossen, die</text>
@@ -105,7 +105,7 @@
 <text x="1035.02" y="1108.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">ausgeschlossen. National tätige</text>
 <text x="1035.02" y="1128.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">Organisationen mit starkem regionalen Fokus</text>
 <text x="1035.02" y="1148.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">wurden nicht ausgeschlossen.</text>
-<text x="492.27" y="1178.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Ausschluss: Q03 Spendenaufruf</text>
+<text x="492.27" y="1178.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Ausschluss: Kein Spendenaufruf</text>
 <text x="492.27" y="1198.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">23</text>
 <text x="492.27" y="1218.50" text-anchor="end" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">Organisationen, die keinen sichtbaren</text>
 <text x="492.27" y="1238.50" text-anchor="end" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">Spendenaufruf haben, wurden ausgeschlossen.</text>
@@ -116,12 +116,13 @@
 <text x="492.27" y="1338.50" text-anchor="end" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">wie ihre Tätigkeit nur aus dem</text>
 <text x="492.27" y="1358.50" text-anchor="end" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">Stiftungsvermögen finanziert wird, wurden</text>
 <text x="492.27" y="1378.50" text-anchor="end" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">ausgeschlossen.</text>
-<text x="1090.03" y="1428.50" text-anchor="start" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Ausschluss: Sanity Check</text>
-<text x="1090.03" y="1448.50" text-anchor="start" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">15</text>
-<text x="1090.03" y="1468.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">Manuell aussoerierte Organisationen, die bei</text>
-<text x="1090.03" y="1488.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">einer kompletten Durchsicht der</text>
-<text x="1090.03" y="1508.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">verbleibenden Organisationen als nicht</text>
-<text x="1090.03" y="1528.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">passend erschienen, wurden ausgeschlossen.</text>
+<text x="1090.03" y="1418.50" text-anchor="start" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Ausschluss: Ergänzende Informationen</text>
+<text x="1090.03" y="1438.50" text-anchor="start" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">13</text>
+<text x="1090.03" y="1458.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">Während ergänzende Informationen wie z.B.</text>
+<text x="1090.03" y="1478.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">das Gründungsjahr, die Rechtsform oder</text>
+<text x="1090.03" y="1498.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">Finanzkennzahlen gesucht wurden, fielen</text>
+<text x="1090.03" y="1518.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">weitere Organisationen auf, die für uns</text>
+<text x="1090.03" y="1538.50" text-anchor="start" font-family="Manrope" font-size="18" font-weight="400" fill="#7a5642">nicht relevant sind.</text>
 <text x="528.20" y="1548.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Ausschluss: Nicht relevante</text>
 <text x="528.20" y="1568.50" text-anchor="end" font-family="Manrope" font-size="22" font-weight="600" fill="#2f1d14">Organisationen</text>
 <text x="528.20" y="1588.50" text-anchor="end" font-family="Manrope" font-size="20" font-weight="500" fill="#5a3a2b">27</text>

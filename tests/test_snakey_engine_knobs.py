@@ -248,6 +248,7 @@ def _build_cases() -> list[KnobCase]:
         KnobCase("style", "title_block_margin", 48, "none"),
         KnobCase("style", "block_title_size", 22, "scene"),
         KnobCase("style", "block_count_size", 20, "scene"),
+        KnobCase("style", "footer_size", 12, "none"),
         KnobCase("style", "block_context_size", 18, "scene"),
         KnobCase("style", "block_line_height", 26, "scene"),
         KnobCase("style", "block_padding_x", 20, "scene"),

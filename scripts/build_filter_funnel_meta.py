@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pandas as pd
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = REPO_ROOT / "data" / "meta" / "filter_funnel_meta.json"
 
@@ -41,12 +40,12 @@ def _count_classify_excluded(df: pd.DataFrame, question_id: str) -> int:
     return int((auto_excluded | review_excluded).sum())
 
 
-def _compute_unattributed_exclusions(df: pd.DataFrame, classify_questions: list[str]) -> int:
+def _compute_unattributed_exclusions(df: pd.DataFrame) -> int:
     excluded_mask = df["_excluded_reason"].astype(str).str.strip() != ""
     website_mask = df["_website_origin"].astype(str).str.strip().str.lower() == "manual_excluded"
 
     classify_mask = pd.Series(False, index=df.index)
-    for question_id in classify_questions:
+    for question_id in _CLASSIFY_QUESTIONS:
         auto_col = f"_classify_{question_id}_auto_result"
         review_col = f"_classify_{question_id}_review_result"
         question_mask = pd.Series(False, index=df.index)
@@ -65,11 +64,78 @@ def _reason_breakdown(series: pd.Series) -> dict[str, int]:
     return {key: int(value) for key, value in cleaned.value_counts().items()}
 
 
-def _attribute_exclusion_step(row: pd.Series, classify_questions: list[str]) -> str:
+_CLASSIFY_QUESTIONS = [
+    "q01_target_focus",
+    "q02_regional_focus",
+    "q03_donation_ask",
+    "q04_primary_target_group",
+    "q05_founded_year",
+]
+
+
+def _classify_decision_method(
+    df: pd.DataFrame, question_id: str, expected_decisions: int,
+) -> dict[str, int]:
+    auto_col = f"_classify_{question_id}_auto_result"
+    review_col = f"_classify_{question_id}_review_result"
+
+    auto = (
+        df[auto_col].fillna("").str.strip()
+        if auto_col in df.columns
+        else pd.Series(dtype=str)
+    )
+    review = (
+        df[review_col].fillna("").str.strip()
+        if review_col in df.columns
+        else pd.Series(dtype=str)
+    )
+
+    reached = auto != ""
+
+    llm_auto = reached & auto.isin(["auto_excluded", "auto_accepted"])
+    manual_review = reached & (auto == "needs_review") & review.isin(["excluded", "accepted"])
+    pending = reached & (auto == "waiting_for_clean_text")
+
+    recorded = int(llm_auto.sum()) + int(manual_review.sum()) + int(pending.sum())
+    manual_gap = expected_decisions - recorded
+
+    return {
+        "decisions": expected_decisions,
+        "classic_algorithm": 0,
+        "llm": int(llm_auto.sum()),
+        "manual": int(manual_review.sum()) + int(pending.sum()) + manual_gap,
+    }
+
+
+def _website_decision_method(df: pd.DataFrame) -> dict[str, int]:
+    origin = df["_website_origin"].fillna("").str.strip().str.lower()
+    stage = df["_website_decision_stage"].fillna("").str.strip()
+    url_final = df["_website_url_final"].fillna("").str.strip() != ""
+
+    manual = origin.isin(["manual_excluded", "manual"]) | url_final | (
+        (origin == "automatic") & (stage == "manual_review")
+    )
+    llm_stages = ["llm_brave_agree", "llm_auto", "firecrawl_agree"]
+    llm = (origin == "manual_llm") | (
+        (origin == "automatic") & ~url_final & stage.isin(llm_stages)
+    )
+    classic_algo = (
+        (origin == "automatic") & ~url_final & stage.isin(["brave_auto", "firecrawl_auto"])
+    )
+
+    return {
+        "decisions": len(df),
+        "classic_algorithm": int(classic_algo.sum()),
+        "llm": int(llm.sum()),
+        "manual": int(manual.sum()),
+    }
+
+
+def _attribute_exclusion_step(row: pd.Series) -> str:
     if str(row.get("_website_origin", "") or "").strip().lower() == "manual_excluded":
         return "website_review_exclusion"
 
-    for question_id in classify_questions:
+    for question_id in _CLASSIFY_QUESTIONS:
         auto_col = f"_classify_{question_id}_auto_result"
         review_col = f"_classify_{question_id}_review_result"
         auto_val = str(row.get(auto_col, "") or "").strip()
@@ -111,39 +177,50 @@ def _build_meta(paths: InputPaths) -> dict[str, object]:
         websites_df["_website_origin"].astype(str).str.strip().str.lower().eq("manual_excluded").sum()
     )
 
-    classify_questions = [
-        "q01_target_focus",
-        "q02_regional_focus",
-        "q03_donation_ask",
-        "q04_primary_target_group",
-        "q05_founded_year",
-    ]
     classify_counts = {
         question_id: _count_classify_excluded(websites_df, question_id)
-        for question_id in classify_questions
+        for question_id in _CLASSIFY_QUESTIONS
     }
 
-    excluded_rows_df = websites_df[websites_df["_excluded_reason"].astype(str).str.strip() != ""].copy()
+    excluded_rows_df = websites_df[
+        websites_df["_excluded_reason"].astype(str).str.strip() != ""
+    ].copy()
     excluded_rows_df["_attributed_step"] = excluded_rows_df.apply(
-        lambda row: _attribute_exclusion_step(row, classify_questions),
+        lambda row: _attribute_exclusion_step(row),
         axis=1,
     )
 
     reason_breakdowns_by_step: dict[str, dict[str, int]] = {}
     for step_id in [
         "website_review_exclusion",
-        *classify_questions,
+        *_CLASSIFY_QUESTIONS,
         "manual_cleanup_or_unattributed",
     ]:
         step_df = excluded_rows_df[excluded_rows_df["_attributed_step"] == step_id]
         reason_breakdowns_by_step[step_id] = _reason_breakdown(step_df["_excluded_reason"])
 
-    unattributed_excluded = _compute_unattributed_exclusions(websites_df, classify_questions)
+    unattributed_excluded = _compute_unattributed_exclusions(websites_df)
 
     excluded_non_empty_mask = websites_df["_excluded_reason"].astype(str).str.strip() != ""
     final_active = int((~excluded_non_empty_mask).sum())
 
     reason_counts = _reason_breakdown(websites_df["_excluded_reason"])
+
+    website_dm = _website_decision_method(websites_df)
+
+    website_remaining = website_dm["decisions"] - website_review_excluded
+    funnel_entrance = {
+        "q01_target_focus": website_remaining,
+    }
+    for i, qid in enumerate(_CLASSIFY_QUESTIONS[1:], start=1):
+        prev_qid = _CLASSIFY_QUESTIONS[i - 1]
+        prev_excluded = classify_counts[prev_qid]
+        funnel_entrance[qid] = funnel_entrance[prev_qid] - prev_excluded
+
+    classify_dm = {
+        qid: _classify_decision_method(websites_df, qid, funnel_entrance[qid])
+        for qid in _CLASSIFY_QUESTIONS
+    }
 
     step_list: list[dict[str, object]] = [
         {
@@ -153,6 +230,12 @@ def _build_meta(paths: InputPaths) -> dict[str, object]:
             "reason_breakdown": {
                 "NOT_CATEGORY_A": category_a_excluded,
             },
+            "decision_method": {
+                "decisions": parsed_total,
+                "classic_algorithm": parsed_total,
+                "llm": 0,
+                "manual": 0,
+            },
         },
         {
             "id": "location_winterthur",
@@ -161,34 +244,55 @@ def _build_meta(paths: InputPaths) -> dict[str, object]:
             "reason_breakdown": {
                 "OUTSIDE_BEZIRK_WINTERTHUR": location_excluded,
             },
+            "decision_method": {
+                "decisions": category_a_remaining,
+                "classic_algorithm": category_a_remaining,
+                "llm": 0,
+                "manual": 0,
+            },
         },
         {
             "id": "website_review_exclusion",
             "excluded": website_review_excluded,
+            "remaining": website_dm["decisions"] - website_review_excluded,
             "reason_breakdown": reason_breakdowns_by_step["website_review_exclusion"],
+            "decision_method": website_dm,
         },
     ]
-    for question_id in classify_questions:
+    for question_id in _CLASSIFY_QUESTIONS:
+        dm = classify_dm[question_id]
+        excluded = classify_counts[question_id]
         step_list.append(
             {
                 "id": question_id,
-                "excluded": classify_counts[question_id],
+                "excluded": excluded,
+                "remaining": funnel_entrance[question_id] - excluded,
                 "reason_breakdown": reason_breakdowns_by_step[question_id],
+                "decision_method": dm,
             }
         )
     step_list.append(
         {
             "id": "manual_cleanup_or_unattributed",
             "excluded": unattributed_excluded,
+            "remaining": 0,
             "reason_breakdown": reason_breakdowns_by_step["manual_cleanup_or_unattributed"],
+            "decision_method": {
+                "decisions": unattributed_excluded,
+                "classic_algorithm": 0,
+                "llm": 0,
+                "manual": unattributed_excluded,
+            },
         }
     )
 
-    known_exclusions = website_review_excluded + sum(classify_counts.values()) + unattributed_excluded
+    known_exclusions = (
+        website_review_excluded + sum(classify_counts.values()) + unattributed_excluded
+    )
     expected_exclusions = int(excluded_non_empty_mask.sum())
 
     return {
-        "version": 1,
+        "version": 2,
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "inputs": {
             "parsed_all": str(paths.parsed_all.relative_to(REPO_ROOT)),
@@ -215,6 +319,10 @@ def _build_meta(paths: InputPaths) -> dict[str, object]:
             "excluded_rows_match": known_exclusions == expected_exclusions,
             "final_active_plus_excluded_equals_downstream": (
                 final_active + expected_exclusions == downstream_cohort
+            ),
+            "excluded_plus_remaining_equals_decisions": all(
+                step["excluded"] + step["remaining"] == step["decision_method"]["decisions"]
+                for step in step_list
             ),
         },
     }

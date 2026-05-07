@@ -90,6 +90,7 @@ class SnakeyModel:
     trunk_nodes: list[TrunkNode]
     stage_labels: list[StageLabel]
     exclusion_nodes: list[ExclusionNode]
+    footer: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +206,7 @@ class SnakeyStyle:
     title_block_margin: int = 24
     block_title_size: int = 18
     block_count_size: int = 16
+    footer_size: int = 10
     block_context_size: int = 14
     block_line_height: int = 20
     block_padding_x: int = 10
@@ -332,6 +334,7 @@ class EdgeRoute:
 class Scene:
     title: str
     subtitle: str
+    footer: str
     width: int
     height: int
     node_anchors: list[NodeAnchor]

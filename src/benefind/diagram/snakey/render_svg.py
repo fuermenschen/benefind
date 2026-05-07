@@ -507,6 +507,11 @@ def render_html(
         if scene.subtitle
         else ""
     )
+    footer_html = (
+        f'<div class="footer">{scene.footer}</div>'
+        if scene.footer
+        else ""
+    )
 
     fit_rule = "max-width: 100%; max-height: 100%; width: auto; height: auto;"
     if page.fit_mode == "none":
@@ -581,6 +586,15 @@ def render_html(
       display: block;
       {fit_rule}
     }}
+    .footer {{
+      font-family: {style.font_family};
+      font-size: {style.footer_size}px;
+      color: {style.context_color};
+      margin-top: {style.title_subtitle_gap}px;
+      line-height: 1.45;
+      overflow-wrap: break-word;
+      word-wrap: break-word;
+    }}
     @page {{
       size: {page_width}px auto;
       margin: 0;
@@ -596,6 +610,7 @@ def render_html(
     <div class="diagram-wrap">
       <img class="diagram" src="{svg_name}" alt="snakey diagram">
     </div>
+    {footer_html}
   </div>
 </body>
 </html>

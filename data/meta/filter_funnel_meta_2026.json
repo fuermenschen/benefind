@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "generated_at": "2026-05-03T08:07:53+00:00",
+  "version": 2,
+  "generated_at": "2026-05-07T21:15:16+00:00",
   "inputs": {
     "parsed_all": "data/parsed/organizations_all.csv",
     "matched": "data/filtered/organizations_matched.csv",
@@ -23,6 +23,12 @@
       "remaining": 6309,
       "reason_breakdown": {
         "NOT_CATEGORY_A": 169
+      },
+      "decision_method": {
+        "decisions": 6478,
+        "classic_algorithm": 6478,
+        "llm": 0,
+        "manual": 0
       }
     },
     {
@@ -31,63 +37,118 @@
       "remaining": 575,
       "reason_breakdown": {
         "OUTSIDE_BEZIRK_WINTERTHUR": 5734
+      },
+      "decision_method": {
+        "decisions": 6309,
+        "classic_algorithm": 6309,
+        "llm": 0,
+        "manual": 0
       }
     },
     {
       "id": "website_review_exclusion",
-      "excluded": 206,
+      "excluded": 208,
+      "remaining": 367,
       "reason_breakdown": {
-        "IRRELEVANT_PURPOSE": 106,
+        "IRRELEVANT_PURPOSE": 108,
         "NO_INFORMATION": 79,
         "NOT_EXIST": 13,
         "IN_LIQUIDATION": 4,
         "OTHER": 4
+      },
+      "decision_method": {
+        "decisions": 575,
+        "classic_algorithm": 204,
+        "llm": 65,
+        "manual": 306
       }
     },
     {
       "id": "q01_target_focus",
       "excluded": 229,
+      "remaining": 138,
       "reason_breakdown": {
         "IRRELEVANT_PURPOSE": 229
+      },
+      "decision_method": {
+        "decisions": 367,
+        "classic_algorithm": 0,
+        "llm": 215,
+        "manual": 152
       }
     },
     {
       "id": "q02_regional_focus",
       "excluded": 50,
+      "remaining": 88,
       "reason_breakdown": {
         "IRRELEVANT_PURPOSE": 50
+      },
+      "decision_method": {
+        "decisions": 138,
+        "classic_algorithm": 0,
+        "llm": 62,
+        "manual": 76
       }
     },
     {
       "id": "q03_donation_ask",
       "excluded": 23,
+      "remaining": 65,
       "reason_breakdown": {
         "IRRELEVANT_PURPOSE": 21,
         "NO_INFORMATION": 2
+      },
+      "decision_method": {
+        "decisions": 88,
+        "classic_algorithm": 0,
+        "llm": 31,
+        "manual": 57
       }
     },
     {
       "id": "q04_primary_target_group",
       "excluded": 6,
+      "remaining": 59,
       "reason_breakdown": {
         "IRRELEVANT_PURPOSE": 5,
         "NOT_EXIST": 1
+      },
+      "decision_method": {
+        "decisions": 65,
+        "classic_algorithm": 0,
+        "llm": 47,
+        "manual": 18
       }
     },
     {
       "id": "q05_founded_year",
       "excluded": 2,
+      "remaining": 57,
       "reason_breakdown": {
         "IRRELEVANT_PURPOSE": 1,
         "NOT_EXIST": 1
+      },
+      "decision_method": {
+        "decisions": 59,
+        "classic_algorithm": 0,
+        "llm": 30,
+        "manual": 29
       }
     },
     {
       "id": "manual_cleanup_or_unattributed",
-      "excluded": 7,
+      "excluded": 5,
+      "remaining": 0,
       "reason_breakdown": {
-        "IRRELEVANT_PURPOSE": 6,
+        "IRRELEVANT_PURPOSE": 4,
         "OTHER": 1
+      },
+      "decision_method": {
+        "decisions": 5,
+        "classic_algorithm": 0,
+        "llm": 0,
+        "manual": 5
       }
     }
   ],
@@ -104,6 +165,7 @@
     "excluded_rows_total": 523,
     "excluded_rows_accounted_by_steps": 523,
     "excluded_rows_match": true,
-    "final_active_plus_excluded_equals_downstream": true
+    "final_active_plus_excluded_equals_downstream": true,
+    "excluded_plus_remaining_equals_decisions": true
   }
 }

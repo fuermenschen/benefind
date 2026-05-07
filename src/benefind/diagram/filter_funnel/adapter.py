@@ -80,12 +80,12 @@ _STAGES = [
     },
     {
         "key": "q03_donation_ask",
-        "label": "Q03 Spendenaufruf",
+        "label": "Kein Spendenaufruf",
         "source_trunk": "trunk_after_q02",
     },
     {
         "key": "sanity_check",
-        "label": "Sanity Check",
+        "label": "Ergänzende Informationen",
         "source_trunk": "trunk_after_q03",
         "aggregated_from": _SANITY_CHECK_STEP_IDS,
     },
@@ -104,6 +104,43 @@ _STAGES = [
 
 def _format_int(value: int) -> str:
     return f"{value:,}".replace(",", "'")
+
+
+_SKIP_STEP_IDS = {"category_a", "location_winterthur",
+                  "q05_founded_year", "manual_cleanup_or_unattributed"}
+
+
+def _decision_footer(meta: dict[str, object]) -> str:
+    steps = meta.get("steps", [])
+    totals = meta.get("totals", {})
+    after_location = int(totals.get("after_location_winterthur", 0))
+    final_active = int(totals.get("final_active", 0))
+    total_classic = 0
+    total_llm = 0
+    total_manual = final_active
+    for step in steps:
+        if str(step.get("id", "")) in _SKIP_STEP_IDS:
+            continue
+        dm = step.get("decision_method", {})
+        if not isinstance(dm, dict):
+            continue
+        total_classic += int(dm.get("classic_algorithm", 0))
+        total_llm += int(dm.get("llm", 0))
+        total_manual += int(dm.get("manual", 0))
+    total = total_classic + total_llm + total_manual
+    return (
+        f"Nach dem Herausfiltern von Organisationen, die nicht rein gemeinnützig "
+        f"tätig sind oder deren Sitz nicht im Bezirk Winterthur liegt, blieben "
+        f"{_format_int(after_location)} Organisationen für die weitere Prüfung. "
+        f"Für diese mussten insgesamt {_format_int(total)} Einzelentscheidungen "
+        f"getroffen werden – beispielsweise ob eine gefundene Webseite tatsächlich "
+        f"zur Organisation gehört, ob ein Spendenaufruf erkennbar ist, oder ob "
+        f"eine Organisation regional tätig ist. Davon wurden "
+        f"{_format_int(total_classic)} Entscheidungen durch Suchalgorithmen getroffen, "
+        f"{_format_int(total_llm)} durch <em>Large Language Models</em> – "
+        f"jedoch nur, wenn kein Zweifel am Ergebnis bestand.  Die verbleibenden "
+        f"{_format_int(total_manual)} Entscheidungen wurden manuell von Hand getroffen."
+    )
 
 
 def _step(steps: list[dict[str, object]], step_id: str) -> dict[str, object]:
@@ -155,7 +192,8 @@ def build_model(
             excluded = int(manual_excluded)
         else:
             agg_ids: list[str] = stage_def.get(
-                "aggregated_from", [stage_def["key"]])  # type: ignore[assignment]
+                # type: ignore[assignment]
+                "aggregated_from", [stage_def["key"]])
             excluded = sum(_step_excluded(steps, sid) for sid in agg_ids)
         resolved_stages.append({**stage_def, "excluded": excluded})
 
@@ -277,8 +315,13 @@ def build_model(
 
     return SnakeyModel(
         title="Benefizpartner:innen-Suche 2026",
-        subtitle="Strukturierte Analyse aller Organisationen, die in Frage kommen könnten. Basiert auf publizierter Liste steuerbefreiter Organisationen im Kanton Zürich.",
+        subtitle=(
+            "Strukturierte Analyse aller Organisationen, die in Frage kommen"
+            " könnten. Basiert auf publizierter Liste steuerbefreiter"
+            " Organisationen im Kanton Zürich."
+        ),
         trunk_nodes=trunk_nodes,
         stage_labels=stage_labels,
         exclusion_nodes=exclusion_nodes,
+        footer=_decision_footer(meta),
     )

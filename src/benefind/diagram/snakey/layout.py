@@ -689,6 +689,7 @@ def layout_snakey(model: SnakeyModel, config: LayoutConfig, style: SnakeyStyle) 
     return Scene(
         title=model.title,
         subtitle=model.subtitle,
+        footer=model.footer,
         width=w,
         height=h,
         node_anchors=fitted_nodes,
